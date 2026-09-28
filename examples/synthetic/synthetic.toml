@@ -1,0 +1,21 @@
+# Offline Indus natural FOC run driven by synthetic VIC forcing
+# (scripts/make_synthetic_forcing.jl). Suitable for the RemoteBMI server and
+# BMI Controller: every `update` reads the month's forcing itself.
+model_name = "INDUS"
+
+[paths]
+data_dir = "../../../data"
+work_dir = "run/mf6"
+output_dir = "run/output"
+forcing_file = "vic_synthetic_monthly.nc"
+
+[time]
+start_date = 1979-01-01
+end_date = 1981-12-31
+
+[coupling]
+foc = true
+pumping = false
+
+[output]
+write_monthly = true

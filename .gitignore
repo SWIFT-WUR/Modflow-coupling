@@ -1,0 +1,3 @@
+run/
+examples/synthetic/run/
+examples/synthetic/*.nc
