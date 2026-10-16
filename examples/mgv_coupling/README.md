@@ -69,12 +69,12 @@ with an error if it doesn't. The mGV config sets the years that run.
 
 ## Starting heads
 
-The global steady-state heads that MODFLOW starts from by default are far from
-balance with the coupled models: from them the heads rise about 0.5 m/year for
-decades. `spinup_steady_state.jl` finds the balance directly. Each iteration
-runs the coupled models daily over the mGV config's years, solves MODFLOW in
-steady state with the mean recharge and river discharge of that run (leaving
-out the first year), and starts the next iteration from those heads:
+The global steady-state heads that MODFLOW starts from by default are close to
+balance with the coupled models, but not in it: from them the heads rise about
+0.2 m/year at first. `spinup_steady_state.jl` finds the balance directly. Each
+iteration runs the coupled models daily over the mGV config's years, solves
+MODFLOW in steady state with the mean recharge and river discharge of that run
+(leaving out the first year), and starts the next iteration from those heads:
 
 ```bash
 julia --project=examples/mgv_coupling examples/mgv_coupling/spinup_steady_state.jl \
@@ -85,14 +85,26 @@ julia --project=examples/mgv_coupling examples/mgv_coupling/spinup_steady_state.
 It writes the heads (variable `gwl`, the form `initial_head_file` reads) and
 the mean forcing (`..._forcing.nc`). `indus_daily.toml` points
 `initial_head_file` at `../data/steady_head_mgv_coupled.nc`, which holds the
-result for 1975–1984 forcing (GFDL-ESM4 historical) after five iterations:
+result for 1975–1984 forcing (GFDL-ESM4 historical) after five iterations,
+starting from the global steady state, with the DRN package and river bottoms
+at `Z0`:
 
 | Iteration | Mean head change of the steady solve | Head drift in the next coupled run | Water created by the coupling |
 | --- | --- | --- | --- |
-| start | – | +0.51 m/year | 28.2 km3/year |
-| 1 | 237 m | +0.005 m/year | 7.4 km3/year |
-| 2 | 0.37 m | −0.005 m/year | 7.3 km3/year |
-| 5 | < 0.01 m | −0.006 m/year | 7.3 km3/year |
+| start | – | +0.19 m/year | 11.0 km3/year |
+| 1 | 68 m | −0.004 m/year | 6.7 km3/year |
+| 2 | 0.03 m | −0.005 m/year | 6.7 km3/year |
+| 4 | < 0.01 m | −0.005 m/year | 6.7 km3/year |
+
+Compared with the global steady state (14,476 variable-head land cells, top
+layer), the heads correlate at r = 0.991. Half of the cells lie within 0.3 m of
+the global head and 73% within 25 m. Below 500 m elevation (7,240 cells, the
+plains) the median difference is 0.0 m (10th–90th percentile −7.6 to +5.4 m)
+and the median depth to the water table is 20 m in both. The differences are in
+the mountains: above 4,000 m the new heads are a median 38 m higher, up to
+several hundred metres in places. The median depth to the water table is 121
+m (global 122 m). The earlier spin-up without DRN, kept as
+`../data/steady_head_mgv_coupled_noDRN.nc`, had a median depth of 7 m.
 
 The steady-state solve uses stronger under-relaxation (0.5) than transient
 periods, because from far away it cycles where a river or EVT boundary
@@ -132,7 +144,7 @@ precedence over a `forcing_file` in the MODFLOW config.
   coupling creates water. The script prints that volume at the end. Daily
   exchange roughly halves it: on the Indus case over 1979–1980, 126 km3 with
   daily exchange against 240 km3 with monthly exchange, both from the global
-  steady-state heads. Starting from the coupled steady state lowers it further,
+  steady-state heads and before the DRN package was added. Starting from the coupled steady state lowers it further,
   to about 7 km3/year, but does not remove it.
 - Cells without a channel length (NaN in the routing input) take no baseflow.
 - Capillary rise that does not fit in the top layer is dropped, as in the
