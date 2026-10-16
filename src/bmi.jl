@@ -4,7 +4,8 @@ BMI for the coupled exchange (coupling_contract.md). Grid 0 is the 2D model grid
 flattened in Julia order: longitude fastest, latitude ascending, then layer.
 Values sit at cell centres (location "node"; grid origin is the SW cell centre).
 Time is in days since `start_date`, reported as CF units "days since <start_date>";
-one `update` is one calendar month.
+one `update` is one stress period (a calendar month, or a day with
+`period = "day"`).
 =#
 
 const INPUT_VARS = Dict(
@@ -18,7 +19,7 @@ const OUTPUT_VARS = Dict(
     "groundwater_head_layer_2" => "m",
     "groundwater_depth" => "m",
     "baseflow_to_routing" => "m3 s-1",
-    "capillary_rise" => "mm month-1",
+    "capillary_rise" => "mm month-1",   # "mm d-1" with period = "day"
 )
 
 function BMI.initialize(::Type{IndusGroundwater}, config_file::AbstractString)
@@ -54,7 +55,8 @@ function var_units(name)
     error("unknown variable $name")
 end
 
-BMI.get_var_units(::IndusGroundwater, name::String) = var_units(name)
+BMI.get_var_units(m::IndusGroundwater, name::String) =
+    name == "capillary_rise" && m.config.period != "month" ? "mm d-1" : var_units(name)
 BMI.get_var_grid(::IndusGroundwater, name::String) = (var_units(name); name == "groundwater_head" ? 1 : 0)
 BMI.get_var_type(::IndusGroundwater, name::String) = (var_units(name); "Float64")
 BMI.get_var_itemsize(::IndusGroundwater, name::String) = (var_units(name); sizeof(Float64))
@@ -62,11 +64,11 @@ BMI.get_var_nbytes(m::IndusGroundwater, name::String) = length(var_array(m, name
 BMI.get_var_location(::IndusGroundwater, name::String) = (var_units(name); "node")
 
 BMI.get_start_time(::IndusGroundwater) = 0.0
-BMI.get_end_time(m::IndusGroundwater) = Float64(Dates.value(m.periods[end] + Month(1) - m.periods[1]))
+BMI.get_end_time(m::IndusGroundwater) = Float64(Dates.value(m.periods[end] + period_step(m.config) - m.periods[1]))
 BMI.get_current_time(m::IndusGroundwater) = Float64(Dates.value(current_date(m) - m.periods[1]))
 BMI.get_time_units(m::IndusGroundwater) = "days since $(m.periods[1])"
 "Length of the next stress period (days)."
-BMI.get_time_step(m::IndusGroundwater) = Float64(daysinmonth(current_date(m)))
+BMI.get_time_step(m::IndusGroundwater) = Float64(period_days(m.config, current_date(m)))
 
 function var_array(m::IndusGroundwater, name::String)
     name == "groundwater_recharge" && return m.recharge

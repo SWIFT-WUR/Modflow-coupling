@@ -79,7 +79,7 @@ function write_simulation(config::Config, s::StaticInputs, p::StaticParameters, 
         write_block(() -> println(io, "  NPER ", length(periods)), io, "DIMENSIONS")
         write_block(io, "PERIODDATA") do
             for d in periods
-                println(io, "  ", fmt(Float64(daysinmonth(d))), " 1 1.0")
+                println(io, "  ", fmt(Float64(period_days(config, d))), " 1 1.0")
             end
         end
     end
@@ -146,7 +146,7 @@ function write_simulation(config::Config, s::StaticInputs, p::StaticParameters, 
             println(io, "  ICONVERT\n    CONSTANT 0")
             write_array(io, "SS", p.ss)
         end
-        write_block(() -> println(io, "  TRANSIENT"), io, "PERIOD 1")
+        write_block(() -> println(io, config.period == "steady" ? "  STEADY-STATE" : "  TRANSIENT"), io, "PERIOD 1")
     end
 
     open(file("ic"), "w") do io

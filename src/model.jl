@@ -13,9 +13,10 @@ end
 """
     IndusGroundwater
 
-MODFLOW 6 groundwater model of the Indus basin, advanced one calendar month per
-`BMI.update`. Set the month's VIC fields before calling `update`; afterwards the
-outputs describe the end of that month and are meant for the *next* VIC month.
+MODFLOW 6 groundwater model of the Indus basin, advanced one stress period (a
+calendar month, or a day with `period = "day"`) per `BMI.update`. Set the
+period's VIC fields before calling `update`; afterwards the outputs describe the
+end of that period and are meant for the *next* VIC period.
 """
 mutable struct IndusGroundwater
     config::Config
@@ -31,7 +32,7 @@ mutable struct IndusGroundwater
     # outputs of the last completed stress period
     head::Array{Float64,3}          # m
     baseflow::Matrix{Float64}       # m3/s
-    capillary::Matrix{Float64}      # mm/month
+    capillary::Matrix{Float64}      # mm per stress period
     completed::Int
     rch_scale::Vector{Float64}      # MF6 BOUND value per unit RCH rate (1 or the DIS cell area)
     inputs_set::Set{Symbol}         # inputs set since the last update (override `forcing_file`)
@@ -129,7 +130,7 @@ end
 
 "Date of the first day of the next stress period to run."
 current_date(m::IndusGroundwater) =
-    m.completed < length(m.periods) ? m.periods[m.completed + 1] : m.periods[end] + Month(1)
+    m.completed < length(m.periods) ? m.periods[m.completed + 1] : m.periods[end] + period_step(m.config)
 
 function set_recharge!(m::IndusGroundwater, recharge::AbstractArray)
     m.recharge .= reshape(recharge, size(m.recharge))
@@ -157,7 +158,7 @@ function set_abstraction!(m::IndusGroundwater, abstraction::AbstractArray)
     return m
 end
 
-"Write the month's RCH, RIV and WEL values into MF6 memory."
+"Write the period's RCH, RIV and WEL values into MF6 memory."
 function apply_stresses!(m::IndusGroundwater)
     p, ptr = m.params, m.ptr
     for (i, c) in enumerate(p.rch_cells)
@@ -194,7 +195,7 @@ function collect_outputs!(m::IndusGroundwater)
 
     fill!(m.capillary, 0.0)
     if ptr.evt_simvals !== nothing
-        days = daysinmonth(m.periods[m.completed])
+        days = period_days(m.config, m.periods[m.completed])
         for (i, c) in enumerate(p.evt_cells)
             m.capillary[c] = -ptr.evt_simvals[i] * days / s.cell_area[c] * 1000.0
         end
@@ -202,7 +203,7 @@ function collect_outputs!(m::IndusGroundwater)
     return m
 end
 
-"Advance one monthly stress period."
+"Advance one stress period."
 function advance!(m::IndusGroundwater)
     m.completed < length(m.periods) || error("simulation already reached $(m.config.end_date)")
     date = m.periods[m.completed + 1]
@@ -224,7 +225,7 @@ function advance!(m::IndusGroundwater)
     end
     MF.finalize_solve(mf)
     MF.finalize_time_step(mf)
-    converged || error("MODFLOW 6 did not converge for $(Dates.format(date, "yyyy-mm"))")
+    converged || error("MODFLOW 6 did not converge for the period starting $date")
     m.completed += 1
     collect_outputs!(m)
     m.config.write_monthly_output && write_monthly_output(m)

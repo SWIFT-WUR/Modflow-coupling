@@ -44,7 +44,7 @@ import BasicModelInterface as BMI
 gw = BMI.initialize(IndusGroundwater, "scripts/indus_natural_foc.toml")
 BMI.set_value(gw, "groundwater_recharge", recharge)   # m/day on the MODFLOW grid
 BMI.set_value(gw, "river_discharge", discharge)       # m3/s
-BMI.update(gw)                                         # one calendar month
+BMI.update(gw)                                         # one stress period (a month by default)
 BMI.get_value_ptr(gw, "baseflow_to_routing")           # m3/s, for next VIC month
 BMI.get_value_ptr(gw, "capillary_rise")                # mm/month, for next VIC month
 BMI.finalize(gw)
@@ -91,7 +91,14 @@ origin at the south-west cell centre). Grid 1 adds 2 layers. Values are
 flattened longitude-fastest with latitude ascending (south-first), matching
 `ibound_indus_normalized.nc`. Use `align_to_grid` to map VIC fields by
 coordinate. Time is reported in CF units `days since <start_date>`, and one
-`update` is one month.
+`update` is one stress period: a calendar month by default, as in the Python
+reference, or one day with `period = "day"` under `[time]` in the config
+(`start_date` may then be any day). With daily periods `capillary_rise` is in
+mm d-1, and the per-period output goes to `indus_modflow_daily.nc`, with restart heads
+at month ends. `period = "steady"` makes one steady-state stress period: one
+`update` solves for the heads in balance with the inputs set through BMI, and
+`write_head(model, path)` saves them in the form `initial_head_file` reads
+(`examples/mgv_coupling/spinup_steady_state.jl` uses this).
 
 | Variable | Direction | Units | Notes |
 | --- | --- | --- | --- |
@@ -102,13 +109,13 @@ coordinate. Time is reported in CF units `days since <start_date>`, and one
 | `groundwater_head_layer_1`, `_layer_2` | out | m | The same heads per layer, on grid 0 |
 | `groundwater_depth` | out | m | Land surface (DIS top) minus layer-1 head; NaN off the landmask |
 | `baseflow_to_routing` | out | m3 s-1 | `-(RIV flow)/86400`; NaN outside the landmask |
-| `capillary_rise` | out | mm month-1 | `-(EVT flow)·days/true area·1000`; FOC only |
+| `capillary_rise` | out | mm month-1 (mm d-1 with daily periods) | `-(EVT flow)·days/true area·1000`; FOC only |
 
 Outputs of month M are meant for VIC month M+1.
 
 ## Design
 
-- **One continuous MF6 simulation.** Each calendar month is one stress period
+- **One continuous MF6 simulation.** Each calendar month (or day) is one stress period
   of one time step. The input files are written once, and each month
   `prepare_time_step`, then the stresses are set through BMI, then a
   `solve` loop runs until convergence (non-convergence is an error). Heads stay

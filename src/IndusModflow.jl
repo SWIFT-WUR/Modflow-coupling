@@ -16,7 +16,7 @@ import ModflowInterface as MF
 import BasicModelInterface as BMI
 
 export IndusGroundwater, Config, load_config, read_static_inputs, build_parameters,
-       audit_static_inputs, align_to_grid, current_date, package_flows
+       audit_static_inputs, align_to_grid, current_date, package_flows, write_head
 
 include("config.jl")
 include("inputs.jl")

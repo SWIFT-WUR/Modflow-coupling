@@ -1,0 +1,25 @@
+# Indus natural FOC run for the daily mGV coupling (couple_mgv.jl). Relative
+# paths are resolved against this file's directory.
+model_name = "INDUS"
+
+[paths]
+data_dir = "../../../data"
+work_dir = "../../run/mgv_daily/mf6"
+output_dir = "../../run/mgv_daily/output"
+# Steady state of the coupled models, written by spinup_steady_state.jl
+# (1975-1984 forcing, five iterations). Remove this line to start from the
+# global steady state instead.
+initial_head_file = "../../../data/steady_head_mgv_coupled.nc"
+
+[time]
+start_date = 1975-01-01
+end_date = 2004-12-31
+period = "day"
+
+[coupling]
+foc = true
+pumping = false
+
+[output]
+write_monthly = false
+save_mf6_binary = false

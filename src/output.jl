@@ -3,18 +3,19 @@ const TIME_UNITS = "days since 1979-01-01 00:00:00"
 """
     write_monthly_output(model)
 
-Append the completed month to `output_dir/indus_modflow_monthly.nc` and write a
-restart head `output_dir/head_YYYYMMDD.nc` (end-of-month date, variable `gwl`,
-Float64) that `initial_head_file` accepts.
+Append the completed stress period to `output_dir/indus_modflow_monthly.nc`
+(`indus_modflow_daily.nc` with `period = "day"`) and, at the end of each month,
+write a restart head `output_dir/head_YYYYMMDD.nc` (end-of-month date, variable
+`gwl`, Float64) that `initial_head_file` accepts.
 """
 function write_monthly_output(m::IndusGroundwater)
     dir = m.config.output_dir
     mkpath(dir)
     s = m.inputs
     start = m.periods[m.completed]
-    stop = lastdayofmonth(start)
+    stop = start + period_step(m.config) - Day(1)
 
-    path = joinpath(dir, "indus_modflow_monthly.nc")
+    path = joinpath(dir, m.config.period == "day" ? "indus_modflow_daily.nc" : "indus_modflow_monthly.nc")
     m.completed == 1 && isfile(path) && rm(path)
     ds = isfile(path) ? NCDataset(path, "a") : create_monthly_file(path, s)
     try
@@ -29,14 +30,29 @@ function write_monthly_output(m::IndusGroundwater)
         close(ds)
     end
 
-    NCDataset(joinpath(dir, "head_$(Dates.format(stop, "yyyymmdd")).nc"), "c") do ds
+    stop == lastdayofmonth(stop) || return
+    write_head(m, joinpath(dir, "head_$(Dates.format(stop, "yyyymmdd")).nc");
+               long_name = "groundwater head at end of $stop")
+end
+
+"""
+    write_head(model, path; long_name)
+
+Write the current heads of both layers to `path` (variable `gwl`, Float64, NaN
+on inactive cells), in the form `initial_head_file` accepts.
+"""
+function write_head(m::IndusGroundwater, path::AbstractString;
+                    long_name = "groundwater head", attrib = Pair{String,Any}[])
+    s = m.inputs
+    mkpath(dirname(abspath(path)))
+    NCDataset(path, "c"; attrib = attrib) do ds
         defVar(ds, "lon", s.lon, ("lon",); attrib = ["units" => "degrees_east"])
         defVar(ds, "lat", s.lat, ("lat",); attrib = ["units" => "degrees_north"])
         defVar(ds, "layer", [0, 1], ("layer",))
         defVar(ds, "gwl", m.head, ("lon", "lat", "layer");
-               attrib = ["units" => "m", "long_name" => "groundwater head at end of $stop"],
-               fillvalue = NaN)
+               attrib = ["units" => "m", "long_name" => long_name], fillvalue = NaN)
     end
+    return path
 end
 
 function create_monthly_file(path, s::StaticInputs)
@@ -52,9 +68,9 @@ function create_monthly_file(path, s::StaticInputs)
     defVar(ds, "groundwater_head", Float64, ("lon", "lat", "layer", "time");
            attrib = ["units" => "m", "long_name" => "head at end of stress period"], fillvalue = NaN)
     defVar(ds, "baseflow_to_routing", Float64, grid2;
-           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV flow)/86400, VIC routing forcing for the next month"], fillvalue = NaN)
+           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV flow)/86400, VIC routing forcing for the next period"], fillvalue = NaN)
     defVar(ds, "capillary_rise", Float64, grid2;
-           attrib = ["units" => "mm month-1", "long_name" => "EVT outflow depth, added to the next VIC month's state"], fillvalue = NaN)
+           attrib = ["units" => "mm per stress period", "long_name" => "EVT outflow depth, added to the next VIC period's state"], fillvalue = NaN)
     defVar(ds, "groundwater_recharge", Float64, grid2;
            attrib = ["units" => "m d-1", "long_name" => "VIC recharge input for the stress period"], fillvalue = NaN)
     defVar(ds, "river_discharge", Float64, grid2;

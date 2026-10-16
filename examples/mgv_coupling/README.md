@@ -1,50 +1,121 @@
-# MODFLOW → mGV coupling example
+# mGV ↔ MODFLOW coupling example
+
+Files:
+
+- `couple_mgv.jl` runs the coupled models.
+- `spinup_steady_state.jl` computes steady-state groundwater heads to start from
+  (see "Starting heads" below).
+- `coupling.jl` holds the functions both scripts share.
+- `indus_daily.toml` is a daily MODFLOW config that starts from the stored
+  steady-state heads.
 
 `couple_mgv.jl` runs IndusModflow and [mGV](https://github.com/SWIFT-WUR/mGV)
-in one Julia process and passes MODFLOW's monthly feedback to mGV through BMI.
-It replaces the file exchange of the Python plugin for this direction.
+in one Julia process and exchanges the fields of `coupling_contract.md` through
+BMI, in both directions, every day. It replaces the monthly file exchange of
+the Python plugin. MODFLOW runs daily stress periods for this: set
+`period = "day"` in the `[time]` section of its config (the default, `"month"`,
+matches the Python reference).
+
+## mGV → MODFLOW
+
+| mGV BMI variable | IndusModflow input | Python plugin equivalent |
+| --- | --- | --- |
+| `channel_water__volume_flow_rate` (m3 s-1) | `river_discharge` (m3 s-1) | `OUT_DISCHARGE` |
+| `land_subsurface__runoff` (mm day-1) ÷ 1000 | `groundwater_recharge` (m day-1) | `OUT_GWRECHARGE` |
+
+mGV's values of day D drive MODFLOW day D. `land_subsurface__runoff` is the
+drainage out of the bottom soil layer. mGV must run with
+`external_groundwater_routing = true` in the `[API]` section of its config, so
+this water reaches the river only through MODFLOW (as baseflow) and not also
+through mGV's own routing. The script stops with an error if it isn't set.
+`groundwater_abstraction` is not coupled: mGV has no water-demand module, and
+the natural case of the contract has no pumping.
+
+## MODFLOW → mGV
 
 | IndusModflow output | mGV BMI variable | Python plugin equivalent |
 | --- | --- | --- |
-| `baseflow_to_routing` (m3 s-1) | `channel_water__area~cross-sectional` (m2): `+= baseflow · dt / channel__length` before every daily mGV step | `discharge_mf` forcing for the VIC-WUR routing plugin |
-| `capillary_rise` (mm month-1) | `soil__moisture_layer_N`, bottom layer (mm); excess moved up a layer at a time against `soil__moisture~maximum_layer_N` | `vic_runner.update_statefile` on `STATE_SOIL_MOISTURE` |
+| `baseflow_to_routing` (m3 s-1) | `channel_water__area~cross-sectional` (m2): `+= baseflow · dt / channel__length` before the next mGV step | `discharge_mf` forcing for the VIC-WUR routing plugin |
+| `capillary_rise` (mm day-1) | `soil__moisture_layer_N`, bottom layer (mm); excess moved up a layer at a time against `soil__moisture~maximum_layer_N` | `vic_runner.update_statefile` on `STATE_SOIL_MOISTURE` |
 
-MODFLOW month M feeds mGV month M+1. Baseflow is held for the whole month.
-Before every mGV time step, one step of baseflow volume (`baseflow · dt`) is
-added to the channel storage. mGV stores a channel as its wetted
-cross-section `area`, so storage is `area · length`. The kinematic wave then
-releases the water downstream. Capillary rise is spread evenly over the days
-of the month and added before every mGV time step. (The Python plugin added it
-once, at the start of the month.)
-
-The VIC → MODFLOW direction is not coupled: MODFLOW reads the offline
-`forcing_file` from its config.
+MODFLOW day D feeds mGV day D+1. Before that mGV step, one day of baseflow
+volume (`baseflow · dt`) is added to the channel storage. mGV stores a channel
+as its wetted cross-section `area`, so storage is `area · length`. The
+kinematic wave then releases the water downstream. Capillary rise is added to
+the soil before the same step. (The Python plugin exchanged monthly, a month
+later, and added capillary rise once at the start of the month.)
 
 ## Setup
 
-mGV needs its `bmi-routing-vars` branch (tested at `7e4e4a6`), which exposes
-all the variables above through BMI. They don't have to be listed in the
-`[API]` section of the mGV config: that list only sets which names mGV
-advertises.
+mGV needs its `mgv-to-modflow-coupling` branch (tested at `34bccf3`), which
+exposes all the variables above through BMI and has the
+`external_groundwater_routing` setting. The variables don't have to be listed in
+`variables` in the `[API]` section of the mGV config: that list only sets
+which names mGV advertises.
 
 ```bash
 cd /path/to/mGV
-git switch bmi-routing-vars
+git switch mgv-to-modflow-coupling
+# and set `external_groundwater_routing = true` under [API] in the mGV config
 
 cd /path/to/IndusModflow
 julia --project=examples/mgv_coupling -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="/path/to/mGV")])'
 julia --project=examples/mgv_coupling examples/mgv_coupling/couple_mgv.jl \
-    /path/to/mGV/configs/indus_config.toml examples/synthetic/synthetic.toml
+    /path/to/mGV/configs/indus_config.toml examples/mgv_coupling/indus_daily.toml
 ```
 
+The MODFLOW config must have `period = "day"` under `[time]`; the script stops
+with an error if it doesn't. The mGV config sets the years that run.
+
+## Starting heads
+
+The global steady-state heads that MODFLOW starts from by default are far from
+balance with the coupled models: from them the heads rise about 0.5 m/year for
+decades. `spinup_steady_state.jl` finds the balance directly. Each iteration
+runs the coupled models daily over the mGV config's years, solves MODFLOW in
+steady state with the mean recharge and river discharge of that run (leaving
+out the first year), and starts the next iteration from those heads:
+
+```bash
+julia --project=examples/mgv_coupling examples/mgv_coupling/spinup_steady_state.jl \
+    /path/to/mGV/configs/indus_1975_1984.toml examples/mgv_coupling/indus_daily.toml \
+    ../data/steady_head_mgv_coupled.nc 5
+```
+
+It writes the heads (variable `gwl`, the form `initial_head_file` reads) and
+the mean forcing (`..._forcing.nc`). `indus_daily.toml` points
+`initial_head_file` at `../data/steady_head_mgv_coupled.nc`, which holds the
+result for 1975–1984 forcing (GFDL-ESM4 historical) after five iterations:
+
+| Iteration | Mean head change of the steady solve | Head drift in the next coupled run | Water created by the coupling |
+| --- | --- | --- | --- |
+| start | – | +0.51 m/year | 28.2 km3/year |
+| 1 | 237 m | +0.005 m/year | 7.4 km3/year |
+| 2 | 0.37 m | −0.005 m/year | 7.3 km3/year |
+| 5 | < 0.01 m | −0.006 m/year | 7.3 km3/year |
+
+The steady-state solve uses stronger under-relaxation (0.5) than transient
+periods, because from far away it cycles where a river or EVT boundary
+switches on and off. Its rivers lose water at the mean stage without checking
+mGV's channels, so the heads include the water the coupling creates.
+
 Both models must start on the same date. The grids are matched by cell-centre
-coordinates (within 0.001°). mGV cells outside the MODFLOW grid get zero
-feedback.
+coordinates (within 0.001°), in both directions. mGV cells outside the MODFLOW
+grid get zero feedback, and MODFLOW cells outside the mGV grid get zero recharge
+and discharge (the script warns about them). Values set through BMI take
+precedence over a `forcing_file` in the MODFLOW config.
 
 ## Caveats
 
-- mGV still routes its own `subsurface_runoff`. In a two-way coupling, VIC
-  baseflow and MODFLOW baseflow must not both reach the river.
+- MODFLOW does not route the river. It uses mGV's discharge only to set the
+  river stage of its RIV package, through its own channel geometry (width from
+  bankfull discharge, `riv_slope_indus.nc`). That geometry differs from mGV's
+  routing (width from upstream area, its own slopes), so MODFLOW's stage is not
+  the depth of the water in mGV's channel.
+- With `external_groundwater_routing = true`, mGV's rivers carry only surface
+  runoff plus MODFLOW's baseflow from the day before. On the Mekong case in
+  January, with monthly exchange, the largest monthly mean discharge was
+  0.1 m3/s before that baseflow came back.
 - The script adds the baseflow to channel storage, not to
   `channel_water__volume_flow_rate` (discharge).
   In mGV's kinematic wave, the stored discharge is only the previous outflow
@@ -55,9 +126,14 @@ feedback.
   458.6 m3/s. 339 channel cells drain to the outlet, so the fully settled
   rise would be 339 m3/s; after 30 days it was 318 m3/s.
 - Negative baseflow (a losing river) cannot take the channel area below zero.
-  When channels run dry, only part of the loss is applied. On the Mekong
-  case, −1 m3/s per cell for 30 days applied 1.2e9 of the requested
-  2.4e9 m3. `add_baseflow!` returns the volume it applied.
+  MODFLOW calculates a day's river loss from its river stage without knowing
+  how much water mGV's channel holds. Where the loss is more than the channel
+  contains, the rest enters the aquifer without leaving the river: the
+  coupling creates water. The script prints that volume at the end. Daily
+  exchange roughly halves it: on the Indus case over 1979–1980, 126 km3 with
+  daily exchange against 240 km3 with monthly exchange, both from the global
+  steady-state heads. Starting from the coupled steady state lowers it further,
+  to about 7 km3/year, but does not remove it.
 - Cells without a channel length (NaN in the routing input) take no baseflow.
 - Capillary rise that does not fit in the top layer is dropped, as in the
   Python plugin. `add_capillary_rise!` returns that volume.

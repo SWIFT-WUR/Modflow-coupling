@@ -33,7 +33,11 @@ end
     Config
 
 Run configuration. Stress periods are calendar months from the month of
-`start_date` through the month of `end_date` (inclusive).
+`start_date` through the month of `end_date` (inclusive), or with
+`period = "day"` single days from `start_date` through `end_date`. The Python
+reference uses months. `period = "steady"` is one steady-state stress period:
+one `update` solves for the heads in balance with the inputs set through BMI
+(rates per day, as for daily periods); `end_date` is then ignored.
 
 - `foc`: fully online coupling; adds the EVT package and capillary-rise feedback.
 - `pumping`: adds a WEL package on all `idomain == 1` cells (human extension).
@@ -51,6 +55,7 @@ Base.@kwdef struct Config
     output_dir::String
     start_date::Date
     end_date::Date
+    period::String = "month"
     model_name::String = "INDUS"
     foc::Bool = true
     pumping::Bool = false
@@ -87,6 +92,7 @@ function load_config(path::AbstractString)
         output_dir = resolve(paths["output_dir"]),
         start_date = Date(time["start_date"]),
         end_date = Date(time["end_date"]),
+        period = lowercase(get(time, "period", "month")),
         model_name = uppercase(get(toml, "model_name", "INDUS")),
         foc = get(coupling, "foc", true),
         pumping = get(coupling, "pumping", false),
@@ -102,7 +108,9 @@ function load_config(path::AbstractString)
 end
 
 function validate(config::Config)
-    day(config.start_date) == 1 ||
+    config.period in ("month", "day", "steady") ||
+        error("period must be \"month\", \"day\" or \"steady\", got \"$(config.period)\"")
+    config.period == "month" && day(config.start_date) != 1 &&
         error("start_date must be the first day of a month, got $(config.start_date)")
     config.end_date >= config.start_date || error("end_date is before start_date")
     length(config.model_name) <= 16 || error("MODFLOW 6 model names are limited to 16 characters")
@@ -110,8 +118,16 @@ function validate(config::Config)
     return config
 end
 
-"First day of every monthly stress period."
+"Length of one stress period (a steady-state period counts as one day)."
+period_step(config::Config) = config.period == "month" ? Month(1) : Day(1)
+
+"First day of every stress period."
 stress_periods(config::Config) =
+    config.period == "steady" ? [config.start_date] :
+    config.period == "day" ? collect(config.start_date:Day(1):config.end_date) :
     collect(config.start_date:Month(1):firstdayofmonth(config.end_date))
+
+"Number of days in the stress period starting at `date`."
+period_days(config::Config, date::Date) = Dates.value(date + period_step(config) - date)
 
 input_path(config::Config, key::AbstractString) = joinpath(config.data_dir, config.files[key])
