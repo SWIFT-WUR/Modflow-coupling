@@ -11,6 +11,7 @@ const RIV_MANNING = 0.045
 const RIV_RESISTANCE = 1.0
 const DEFAULT_AQDEPTH = 200.0
 const SECONDS_PER_DAY = 86400.0
+const KQ3_MIN = 1.0e-4
 
 "Intrinsic permeability (log10 m²) to hydraulic conductivity (m/day)."
 permeability_to_conductivity(log10k) = RHO_WATER * 10.0^log10k * (G_GRAVITY / MU_WATER) * 86400.0
@@ -29,6 +30,13 @@ struct RiverParameters
     bottom::Vector{Float64}         # MF6 RBOT
 end
 
+"DRN records (`get_drn_param`): groundwater above the floodplain drains as baseflow."
+struct DrainParameters
+    cells::Vector{CartesianIndex{2}}
+    elevation::Vector{Float64}      # m, max(Z0 floodplain, lowest Z0 in the catchment)
+    conductance::Vector{Float64}    # m²/day, KQ3 · storage coefficient · true cell area
+end
+
 struct StaticParameters
     top::Matrix{Float64}
     botm::Array{Float64,3}
@@ -41,6 +49,7 @@ struct StaticParameters
     rch_cells::Vector{CartesianIndex{2}}
     area_factor::Matrix{Float64}          # true cell area / DIS cell area
     river::RiverParameters
+    drain::DrainParameters
     evt_cells::Vector{CartesianIndex{2}}
     evt_surface::Vector{Float64}
     evt_rate::Vector{Float64}             # area-corrected, m/day
@@ -103,7 +112,10 @@ function river_parameters(s::StaticInputs, top)
     head_ini = ifelse.(width .> 30, z0_2, top)
     head_ini[.!s.landmask] .= 0.0
     depth_bankfull = ((RIV_MANNING .* sqrt.(s.qbank)) ./ (4.8 .* sqrt.(slope_used))) .^ (3 / 5)
-    bottom_bankfull = min_dem2 .- depth_bankfull
+    # River bottom from the floodplain elevation Z0, as the drain level (DRN), not
+    # from min_dem as in the Python reference: min_dem lies a median 8 m above Z0
+    # in river cells, which put rivers above their own drains (NOTES.md in the data directory).
+    bottom_bankfull = z0_2 .- depth_bankfull
 
     riv_cond = ifelse.(width .> 30, width .* sqrt.(2 .* s.cell_area), 0.0) ./ RIV_RESISTANCE
     riv_cond[.!s.landmask] .= 0.0
@@ -138,6 +150,32 @@ function river_stage(r::RiverParameters, i::Integer, discharge::Real)
     depth = isnan(depth) || depth < 0.01 ? 0.0 : depth
     stage = r.bottom_bankfull[i] + depth
     return isnan(stage) ? r.head_ini[i] : stage
+end
+
+"""
+DRN records (`get_drn_param`, layer 1). The drain elevation is the floodplain
+elevation, but not below the lowest floodplain elevation of the cell's catchment;
+the conductance makes each cell a linear reservoir with recession constant KQ3.
+Unlike the Python code, cells with a non-finite elevation or conductance and
+inactive cells get no record (MF6 would reject them).
+"""
+function drain_parameters(s::StaticInputs, ss)
+    land = s.landmask
+    z0 = s.z0_floodplain
+    catchment_min = Dict{Float64,Float64}()
+    for c in CartesianIndices(z0)
+        id = s.catchment[c]
+        (land[c] && isfinite(id) && isfinite(z0[c])) || continue
+        catchment_min[id] = min(get(catchment_min, id, Inf), z0[c])
+    end
+    base = [isfinite(s.catchment[c]) ? get(catchment_min, s.catchment[c], NaN) : NaN for c in CartesianIndices(z0)]
+    elevation = max.(z0, base)                          # NaN propagates, as np.maximum
+    kq3 = [isnan(k) ? k : clamp(k, KQ3_MIN, 1.0) for k in s.kq3]
+    conductance = kq3 .* ss[:, :, 1] .* s.cell_area
+    cells = [c for c in CartesianIndices(z0)
+             if land[c] && s.idomain[c] > 0 && isfinite(elevation[c]) &&
+                isfinite(conductance[c]) && conductance[c] > 0]
+    return DrainParameters(cells, elevation[cells], conductance[cells])
 end
 
 "EVT records (`get_cpr_param`), restricted to active cells."
@@ -199,6 +237,7 @@ function build_parameters(s::StaticInputs, config::Config)
         chd_cells, chd_head,
         findall(>(0), s.idomain), area_factor,
         river_parameters(s, top),
+        drain_parameters(s, ss),
         evt...,
         config.pumping ? findall(==(1), s.idomain) : CartesianIndex{2}[],
     )
@@ -230,6 +269,11 @@ function audit_static_inputs(s::StaticInputs, p::StaticParameters)
             cor(s.dem[land], s.steady_head[:, :, 1][land]) > 0.8,
         "orientation: bankfull discharge > 5000 m3/s near Sukkur" => maximum(s.qbank[window]) > 5000,
         "orientation: bankfull discharge > 10 m3/s only on land" => all(s.landmask[s.qbank .> 10]),
+        "orientation: Indus main stem in one catchment" => let ids = s.catchment[s.qbank .> 1000]
+            maximum(count(==(u), ids) for u in unique(ids)) / length(ids) > 0.9
+        end,
+        "DRN on at least 95% of active land cells" =>
+            length(p.drain.cells) >= 0.95 * count(s.landmask .& active),
     ]
     return checks
 end

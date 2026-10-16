@@ -68,17 +68,22 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         @test BMI.get_end_time(m) == 90.0
         @test BMI.get_time_step(m) == 31.0
         @test sort(BMI.get_input_var_names(m)) == ["groundwater_abstraction", "groundwater_recharge", "river_discharge"]
-        riv, evt, rch = Vector{Float64}[], Vector{Float64}[], Vector{Float64}[]
+        riv, evt, rch, drn = Vector{Float64}[], Vector{Float64}[], Vector{Float64}[], Vector{Float64}[]
         heads = Array{Float64,3}[]
         for frac in FORCING
             force!(m, frac)
             BMI.update(m)
             push!(riv, package_flows(m, "RIV")); push!(evt, package_flows(m, "EVT")); push!(rch, package_flows(m, "RCH"))
+            push!(drn, package_flows(m, "DRN"))
             push!(heads, copy(m.head))
             # MODFLOW -> VIC conversions (coupling_contract.md)
             bf = reshape(BMI.get_value(m, "baseflow_to_routing", zeros(length(m.baseflow))), size(m.baseflow))
             @test all(isnan, bf[.!s.landmask])
-            @test all(bf[c] ≈ -riv[end][k] / 86400 for (k, c) in enumerate(p.river.cells))
+            expected = zeros(size(bf))
+            for (k, c) in enumerate(p.river.cells); expected[c] -= riv[end][k] / 86400; end
+            for (k, c) in enumerate(p.drain.cells); expected[c] -= drn[end][k] / 86400; end
+            @test all(bf[s.landmask] .≈ expected[s.landmask])
+            @test all(<=(0), drn[end])                     # drains only remove water
             days = daysinmonth(m.periods[m.completed])
             @test all(m.capillary[c] ≈ -evt[end][k] * days / s.cell_area[c] * 1000 for (k, c) in enumerate(p.evt_cells))
             @test all(>=(0), m.capillary)
@@ -95,7 +100,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
 
         # BMI SIMVALS equal the MF6 budget in the listing file
         lst = joinpath(cfg.work_dir, "indus.lst")
-        for (pkg, flows) in (("RIV", riv), ("EVT", evt), ("RCH", rch))
+        for (pkg, flows) in (("RIV", riv), ("EVT", evt), ("RCH", rch), ("DRN", drn))
             for (k, (qin, qout)) in enumerate(listing_rates(lst, pkg))
                 @test sum(max.(flows[k], 0)) ≈ qin rtol = 1e-8 atol = 1e-3
                 @test -sum(min.(flows[k], 0)) ≈ qout rtol = 1e-8 atol = 1e-3

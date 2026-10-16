@@ -1,7 +1,8 @@
 #=
 Writes a MODFLOW 6 simulation covering all monthly stress periods. Package
-settings follow mf_run.mfrun.run_modflow. Boundary packages whose values change
-each month (RCH, RIV, WEL) contain records for every candidate cell in period 1;
+settings follow mf_run.mfrun.run_modflow, plus the DRN package of the global
+model (`get_drn_param`), which the Python Indus case left out. DRN is static.
+Boundary packages whose values change each month (RCH, RIV, WEL) contain records for every candidate cell in period 1;
 the values are overwritten through BMI before each time step, so later periods
 need no PERIOD block. MF6 6.3 multiplies RCH rates by the cell area while
 reading the PERIOD block, so values written through BMI must include that
@@ -105,7 +106,7 @@ function write_simulation(config::Config, s::StaticInputs, p::StaticParameters, 
     end
 
     packages = ["DIS6 $name.dis DIS", "NPF6 $name.npf NPF", "STO6 $name.sto STO", "IC6 $name.ic IC",
-                "CHD6 $name.chd CHD", "RCH6 $name.rch RCH", "RIV6 $name.riv RIV"]
+                "CHD6 $name.chd CHD", "RCH6 $name.rch RCH", "RIV6 $name.riv RIV", "DRN6 $name.drn DRN"]
     config.foc && push!(packages, "EVT6 $name.evt EVT")
     config.pumping && push!(packages, "WEL6 $name.wel WEL")
     push!(packages, "OC6 $name.oc OC")
@@ -163,6 +164,8 @@ function write_simulation(config::Config, s::StaticInputs, p::StaticParameters, 
     r = p.river
     stage0 = [river_stage(r, i, 0.0) for i in eachindex(r.cells)]
     write_list_package(file("riv"), r.cells, hcat(stage0, r.conductance, r.bottom); options = save)
+    d = p.drain
+    write_list_package(file("drn"), d.cells, hcat(d.elevation, d.conductance); options = save)
     if config.foc
         write_list_package(file("evt"), p.evt_cells, hcat(p.evt_surface, p.evt_rate, p.evt_depth);
                            options = ["FIXED_CELL"; save], dims = ["NSEG 1"])

@@ -20,7 +20,10 @@ align them. The table below records the verified storage order of each field
   steady-state head (r ≈ 0.96 south-first, negative when mirrored);
 - `qbank` must peak on the lower Indus main stem (Sukkur, Hyderabad);
 - `riv_slope` must correlate with the DEM gradient (r = 0.79 vs -0.26);
-- sea cells (SW corner) must be missing in `aqdepth`, `ksat_log`, `spe_yi`.
+- sea cells (SW corner) must be missing in `aqdepth`, `ksat_log`, `spe_yi`;
+- the Indus main stem (`qbank` > 1000 m³/s) must lie in one `ldd` catchment
+  (0.97 north-first vs 0.76 mirrored, 2026-10-16);
+- log `KQ3` must correlate with aquifer depth (r = 0.59 vs 0.18) and permeability.
 
 `audit_static_inputs` repeats the cheap fingerprints on every model build.
 The Python reference combined raw `.values` and therefore mirrored the
@@ -41,6 +44,8 @@ const STORAGE_ORDER = Dict(
     "spe_yi" => :north_first,
     "qbank" => :north_first,
     "riv_slope" => :north_first,
+    "kq3" => :north_first,
+    "ldd" => :north_first,          # catchment ids, not flow directions
 )
 
 "Static inputs aligned to the model grid. Missing values are NaN."
@@ -65,6 +70,8 @@ struct StaticInputs
     cpsurface::Matrix{Float64}
     cprate::Matrix{Float64}
     cpdistinct::Matrix{Float64}
+    kq3::Matrix{Float64}            # groundwater recession constant, 1/day
+    catchment::Matrix{Float64}      # catchment id (`ldd_indus_updated.nc`)
     steady_head::Array{Float64,3}
 end
 
@@ -177,6 +184,8 @@ function read_static_inputs(config::Config)
         capillary("cpsurface"),
         capillary("cprate"),
         capillary("cpdistinct"),
+        field("kq3"),
+        field("ldd"),
         select_global_head(path("global_steady_head"), lon, lat),
     )
 end

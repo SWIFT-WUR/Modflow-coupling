@@ -5,6 +5,7 @@ struct Mf6Pointers
     rch_bound::Matrix{Float64}                   # (1, nrch): recharge rate
     riv_bound::Matrix{Float64}                   # (3, nriv): stage, cond, rbot
     riv_simvals::Vector{Float64}                 # m3/day, positive into the aquifer
+    drn_simvals::Vector{Float64}                 # m3/day, negative out of the aquifer
     evt_simvals::Union{Vector{Float64},Nothing}  # m3/day, negative out of the aquifer
     wel_bound::Union{Matrix{Float64},Nothing}    # (1, nwel): q
     mxiter::Int
@@ -97,7 +98,7 @@ function initialize_mf6!(m::IndusGroundwater)
     m.ptr = Mf6Pointers(
         vec(head), nodeuser,
         ptr("BOUND", "RCH"), ptr("BOUND", "RIV"),
-        vec(ptr("SIMVALS", "RIV")), evt_simvals, wel_bound,
+        vec(ptr("SIMVALS", "RIV")), vec(ptr("SIMVALS", "DRN")), evt_simvals, wel_bound,
         Int(only(mf6_pointer(mf, "SLN_1", "MXITER"))),
     )
 
@@ -120,6 +121,7 @@ function calibrate_bmi!(m::IndusGroundwater)
     end
     check("RCH", p.rch_cells)
     check("RIV", p.river.cells)
+    check("DRN", p.drain.cells)
     m.config.foc && check("EVT", p.evt_cells)
     m.config.pumping && check("WEL", p.wel_cells)
     m.rch_scale = ptr.rch_bound[1, :]
@@ -187,8 +189,12 @@ function collect_outputs!(m::IndusGroundwater)
     end
 
     fill!(m.baseflow, 0.0)
+    # baseflow_to_routing = -(RIV + DRN) / 86400 (coupling_contract.md)
     for (i, c) in enumerate(p.river.cells)
         m.baseflow[c] = -ptr.riv_simvals[i] / SECONDS_PER_DAY
+    end
+    for (i, c) in enumerate(p.drain.cells)
+        m.baseflow[c] -= ptr.drn_simvals[i] / SECONDS_PER_DAY
     end
     replace!(x -> abs(x) > 1e8 ? 0.0 : x, m.baseflow)
     m.baseflow[.!s.landmask] .= NaN

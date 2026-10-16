@@ -68,7 +68,7 @@ function create_monthly_file(path, s::StaticInputs)
     defVar(ds, "groundwater_head", Float64, ("lon", "lat", "layer", "time");
            attrib = ["units" => "m", "long_name" => "head at end of stress period"], fillvalue = NaN)
     defVar(ds, "baseflow_to_routing", Float64, grid2;
-           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV flow)/86400, VIC routing forcing for the next period"], fillvalue = NaN)
+           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV + DRN flow)/86400, VIC routing forcing for the next period"], fillvalue = NaN)
     defVar(ds, "capillary_rise", Float64, grid2;
            attrib = ["units" => "mm per stress period", "long_name" => "EVT outflow depth, added to the next VIC period's state"], fillvalue = NaN)
     defVar(ds, "groundwater_recharge", Float64, grid2;

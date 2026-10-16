@@ -15,6 +15,8 @@ const DEFAULT_FILES = Dict(
     "min_dem" => "min_dem_indus.nc",
     "z0_floodplain" => "Z0_floodplain_indus_updated.nc",
     "capillary" => "capillary_rise_indus.nc",
+    "kq3" => "KQ3_indus.nc",
+    "ldd" => "ldd_indus_updated.nc",
     "global_steady_head" => "mf_ss_gwl_5minDRN.nc",
 )
 

@@ -27,6 +27,7 @@ the `[files]` table of a config (see `DEFAULT_FILES` in `src/config.jl`).
 | land mask | `landmask_indus.nc` |
 | rivers | `bankfull_discharge_indus.nc`, `riv_slope_indus.nc`, `min_dem_indus.nc`, `Z0_floodplain_indus_updated.nc` |
 | capillary rise (EVT) | `capillary_rise_indus.nc` |
+| drainage (DRN) | `KQ3_indus.nc` (recession constant), `ldd_indus_updated.nc` (catchment ids) |
 | initial and CHD head | `mf_ss_gwl_5minDRN.nc` (global steady state) |
 
 ## Quick start
@@ -108,7 +109,7 @@ at month ends. `period = "steady"` makes one steady-state stress period: one
 | `groundwater_head` | out | m | End of month, both layers (grid 1); NaN on inactive cells |
 | `groundwater_head_layer_1`, `_layer_2` | out | m | The same heads per layer, on grid 0 |
 | `groundwater_depth` | out | m | Land surface (DIS top) minus layer-1 head; NaN off the landmask |
-| `baseflow_to_routing` | out | m3 s-1 | `-(RIV flow)/86400`; NaN outside the landmask |
+| `baseflow_to_routing` | out | m3 s-1 | `-(RIV + DRN flow)/86400`; NaN outside the landmask |
 | `capillary_rise` | out | mm month-1 (mm d-1 with daily periods) | `-(EVT flow)·days/true area·1000`; FOC only |
 
 Outputs of month M are meant for VIC month M+1.
@@ -146,12 +147,27 @@ Outputs of month M are meant for VIC month M+1.
    although the record counts still match (1,410 CHD, 15,165 RIV).
 2. **MODFLOW 6 version.** 6.3.0, the version Modflow6_jll provides. The
    version of the reference `mf6` executable is not recorded.
-3. **Record sets.** RCH covers every active cell (a zero rate adds no flow). The
+3. **DRN is on.** The Python Indus case left out the DRN package of the global
+   model (`get_drn_param`). Here it is always on: a drain in every active land
+   cell at the floodplain elevation `Z0` (not below the lowest `Z0` of the
+   catchment), with conductance `KQ3 · storage coefficient · true cell area`, so
+   groundwater above the floodplain drains like a linear reservoir. Its outflow
+   is part of `baseflow_to_routing`. The global steady-state head was computed
+   with this drain. Records with a non-finite elevation or KQ3 are left out
+   (14,917 of 15,165 active land cells get one).
+4. **River bottom from `Z0`.** The river bottom is the floodplain elevation
+   `Z0` minus the bankfull depth, not `min_dem` minus the bankfull depth as in
+   the Python reference. `min_dem` lies a median 8 m above `Z0` in river cells,
+   which put rivers above their own drains and let water short-circuit from
+   river to aquifer to drain (1,393 km³/year in a steady state with 172
+   km³/year of recharge). `NOTES.md` in the data directory lists this and the
+   other issues found in the static inputs.
+5. **Record sets.** RCH covers every active cell (a zero rate adds no flow). The
    Python code skipped zero-rate cells. EVT is restricted to active cells, which
    excludes no cells for this dataset.
 
 The Python reference behaviours below are kept on purpose: the IMS settings
-(`outer_dvclose = 5 m`), DRN disabled, NaN → 0 in restart heads, the global
+(`outer_dvclose = 5 m`), NaN → 0 in restart heads, the global
 steady head as the first IC and CHD head, and scaling RCH/EVT by
 true area / DIS area.
 
