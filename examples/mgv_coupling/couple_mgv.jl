@@ -44,7 +44,7 @@ mgv_config = abspath(get(ARGS, 1, ""))
 mf_config = abspath(get(ARGS, 2, ""))
 (isfile(mgv_config) && isfile(mf_config)) || error("usage: couple_mgv.jl <mgv_config.toml> <modflow_config.toml>")
 
-gw = BMI.initialize(IndusGroundwater, mf_config)
+gw = BMI.initialize(GroundwaterModel, mf_config)
 vic = BMI.initialize(mGV.Model, mgv_config)
 coupling = Coupling(gw, vic)
 

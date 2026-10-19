@@ -27,13 +27,10 @@ mgv_config, mf_config, out_head = abspath.(ARGS[1:3])
 iterations = parse(Int, get(ARGS, 4, "3"))
 skip_years = parse(Int, get(ARGS, 5, "1"))
 
-"`config` with some fields replaced."
-with(config::Config; kw...) = Config(; (f => get(kw, f, getfield(config, f)) for f in fieldnames(Config))...)
-
 # The steady-state solve starts far from its solution and can cycle where a river
 # or EVT boundary switches on and off; damp the head changes more than the
 # transient default (0.99) does.
-const STEADY_SOLVER = IndusModflow.SolverSettings(outer_maximum = 2000, under_relaxation_gamma = 0.5)
+const STEADY_SOLVER = ModflowCoupling.SolverSettings(outer_maximum = 2000, under_relaxation_gamma = 0.5)
 
 "Mean forcing of the steady state, saved next to the head file."
 function write_forcing(path, s, rch, q; attrib)
@@ -51,7 +48,7 @@ mean_abs(a, b) = mean(abs, filter(isfinite, a .- b))
 
 for it in 1:iterations
     # 1. coupled run from the current heads
-    gw = IndusGroundwater(with(base; initial_head_file = start_head, write_monthly_output = false))
+    gw = GroundwaterModel(Config(base; initial_head_file = start_head, write_monthly_output = false))
     vic = BMI.initialize(mGV.Model, mgv_config)
     c = Coupling(gw, vic)
     head0 = copy(gw.head)
@@ -72,7 +69,7 @@ for it in 1:iterations
     BMI.finalize(gw); BMI.finalize(vic)
 
     # 2-3. steady state with the mean forcing
-    ss = IndusGroundwater(with(base; period = "steady", end_date = base.start_date,
+    ss = GroundwaterModel(Config(base; period = "steady", end_date = base.start_date,
                                initial_head_file = start_head, write_monthly_output = false,
                                work_dir = joinpath(base.work_dir, "steady"), solver = STEADY_SOLVER))
     BMI.set_value(ss, "groundwater_recharge", rch ./ n)

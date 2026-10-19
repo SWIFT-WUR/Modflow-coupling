@@ -1,5 +1,5 @@
 #=
-Write synthetic monthly VIC output for offline IndusModflow runs, in the layout
+Write synthetic monthly VIC output for offline Indus runs, in the layout
 of VIC image-driver output (lat north-first, lon, time; NaN off the landmask):
 
 - OUT_GWRECHARGE (mm/month): a monsoon peak in Jul–Sep (strongest in the wetter
@@ -10,14 +10,13 @@ Each year gets a wetness factor so the years differ (1980 wet, 1981 dry).
 
 The fields are illustrative only; they are not a VIC simulation.
 
-    julia --project=. scripts/make_synthetic_forcing.jl [output.nc] [first_year] [last_year]
+    julia --project=. examples/indus/make_synthetic_forcing.jl [output.nc] [first_year] [last_year]
 =#
-using IndusModflow, NCDatasets, Dates
+using ModflowCoupling, NCDatasets, Dates
 
 gauss(x, mu, sigma) = exp(-0.5 * ((x - mu) / sigma)^2)
 
-function make_synthetic_forcing(path, years)
-    config = load_config(joinpath(@__DIR__, "indus_natural_foc.toml"))
+function make_synthetic_forcing(path, years; config = load_config(joinpath(@__DIR__, "indus.toml")))
     s = read_static_inputs(config)
     lon, lat = s.lon, s.lat
     wetness(y) = (0.9, 1.3, 0.7)[mod(y - first(years), 3) + 1]
@@ -41,7 +40,7 @@ function make_synthetic_forcing(path, years)
     mkpath(dirname(path))
     isfile(path) && rm(path)
     NCDataset(path, "c") do ds
-        # VIC image output stores latitude north-first; IndusModflow aligns by coordinate.
+        # VIC image output stores latitude north-first; ModflowCoupling aligns by coordinate.
         defVar(ds, "lon", lon, ("lon",); attrib = ["units" => "degrees_east", "standard_name" => "longitude"])
         defVar(ds, "lat", reverse(lat), ("lat",); attrib = ["units" => "degrees_north", "standard_name" => "latitude"])
         defVar(ds, "time", DateTime.(dates), ("time",); attrib = ["units" => "days since 1979-01-01 00:00:00", "calendar" => "standard"])
@@ -51,14 +50,14 @@ function make_synthetic_forcing(path, years)
         defVar(ds, "OUT_DISCHARGE", reverse(discharge; dims = 2), ("lon", "lat", "time");
                attrib = ["units" => "m3/s", "long_name" => "synthetic river discharge"],
                fillvalue = NaN32, deflatelevel = 4)
-        ds.attrib["title"] = "Synthetic VIC monthly output for IndusModflow offline tests"
-        ds.attrib["history"] = "Created $(now()) by IndusModflow/scripts/make_synthetic_forcing.jl"
+        ds.attrib["title"] = "Synthetic VIC monthly output for offline Indus MODFLOW runs"
+        ds.attrib["history"] = "Created $(now()) by ModflowCoupling/examples/indus/make_synthetic_forcing.jl"
     end
     return path
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    out = get(ARGS, 1, joinpath(@__DIR__, "..", "examples", "synthetic", "vic_synthetic_monthly.nc"))
+    out = get(ARGS, 1, joinpath(@__DIR__, "vic_synthetic_monthly.nc"))
     y0 = parse(Int, get(ARGS, 2, "1979"))
     y1 = parse(Int, get(ARGS, 3, "1981"))
     println("wrote ", make_synthetic_forcing(normpath(out), y0:y1))

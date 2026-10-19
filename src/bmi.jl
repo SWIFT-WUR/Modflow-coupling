@@ -22,32 +22,32 @@ const OUTPUT_VARS = Dict(
     "capillary_rise" => "mm month-1",   # "mm d-1" with period = "day"
 )
 
-function BMI.initialize(::Type{IndusGroundwater}, config_file::AbstractString)
-    return IndusGroundwater(load_config(config_file))
+function BMI.initialize(::Type{GroundwaterModel}, config_file::AbstractString)
+    return GroundwaterModel(load_config(config_file))
 end
 
-function BMI.update(m::IndusGroundwater)
+function BMI.update(m::GroundwaterModel)
     advance!(m)
     return nothing
 end
 
-function BMI.update_until(m::IndusGroundwater, time::Float64)
+function BMI.update_until(m::GroundwaterModel, time::Float64)
     while BMI.get_current_time(m) < time - 1e-9
         advance!(m)
     end
     return nothing
 end
 
-function BMI.finalize(m::IndusGroundwater)
+function BMI.finalize(m::GroundwaterModel)
     finalize!(m)
     return nothing
 end
 
-BMI.get_component_name(::IndusGroundwater) = "IndusModflow (MODFLOW 6)"
-BMI.get_input_item_count(::IndusGroundwater) = length(INPUT_VARS)
-BMI.get_output_item_count(::IndusGroundwater) = length(OUTPUT_VARS)
-BMI.get_input_var_names(::IndusGroundwater) = sort!(collect(keys(INPUT_VARS)))
-BMI.get_output_var_names(::IndusGroundwater) = sort!(collect(keys(OUTPUT_VARS)))
+BMI.get_component_name(::GroundwaterModel) = "ModflowCoupling (MODFLOW 6)"
+BMI.get_input_item_count(::GroundwaterModel) = length(INPUT_VARS)
+BMI.get_output_item_count(::GroundwaterModel) = length(OUTPUT_VARS)
+BMI.get_input_var_names(::GroundwaterModel) = sort!(collect(keys(INPUT_VARS)))
+BMI.get_output_var_names(::GroundwaterModel) = sort!(collect(keys(OUTPUT_VARS)))
 
 function var_units(name)
     haskey(INPUT_VARS, name) && return INPUT_VARS[name]
@@ -55,22 +55,22 @@ function var_units(name)
     error("unknown variable $name")
 end
 
-BMI.get_var_units(m::IndusGroundwater, name::String) =
+BMI.get_var_units(m::GroundwaterModel, name::String) =
     name == "capillary_rise" && m.config.period != "month" ? "mm d-1" : var_units(name)
-BMI.get_var_grid(::IndusGroundwater, name::String) = (var_units(name); name == "groundwater_head" ? 1 : 0)
-BMI.get_var_type(::IndusGroundwater, name::String) = (var_units(name); "Float64")
-BMI.get_var_itemsize(::IndusGroundwater, name::String) = (var_units(name); sizeof(Float64))
-BMI.get_var_nbytes(m::IndusGroundwater, name::String) = length(var_array(m, name)) * sizeof(Float64)
-BMI.get_var_location(::IndusGroundwater, name::String) = (var_units(name); "node")
+BMI.get_var_grid(::GroundwaterModel, name::String) = (var_units(name); name == "groundwater_head" ? 1 : 0)
+BMI.get_var_type(::GroundwaterModel, name::String) = (var_units(name); "Float64")
+BMI.get_var_itemsize(::GroundwaterModel, name::String) = (var_units(name); sizeof(Float64))
+BMI.get_var_nbytes(m::GroundwaterModel, name::String) = length(var_array(m, name)) * sizeof(Float64)
+BMI.get_var_location(::GroundwaterModel, name::String) = (var_units(name); "node")
 
-BMI.get_start_time(::IndusGroundwater) = 0.0
-BMI.get_end_time(m::IndusGroundwater) = Float64(Dates.value(m.periods[end] + period_step(m.config) - m.periods[1]))
-BMI.get_current_time(m::IndusGroundwater) = Float64(Dates.value(current_date(m) - m.periods[1]))
-BMI.get_time_units(m::IndusGroundwater) = "days since $(m.periods[1])"
+BMI.get_start_time(::GroundwaterModel) = 0.0
+BMI.get_end_time(m::GroundwaterModel) = Float64(Dates.value(m.periods[end] + period_step(m.config) - m.periods[1]))
+BMI.get_current_time(m::GroundwaterModel) = Float64(Dates.value(current_date(m) - m.periods[1]))
+BMI.get_time_units(m::GroundwaterModel) = "days since $(m.periods[1])"
 "Length of the next stress period (days)."
-BMI.get_time_step(m::IndusGroundwater) = Float64(period_days(m.config, current_date(m)))
+BMI.get_time_step(m::GroundwaterModel) = Float64(period_days(m.config, current_date(m)))
 
-function var_array(m::IndusGroundwater, name::String)
+function var_array(m::GroundwaterModel, name::String)
     name == "groundwater_recharge" && return m.recharge
     name == "river_discharge" && return m.discharge
     name == "groundwater_abstraction" && return m.abstraction
@@ -84,12 +84,12 @@ function var_array(m::IndusGroundwater, name::String)
     error("unknown variable $name")
 end
 
-BMI.get_value_ptr(m::IndusGroundwater, name::String) = vec(var_array(m, name))
-BMI.get_value(m::IndusGroundwater, name::String, dest) = copyto!(dest, vec(var_array(m, name)))
-BMI.get_value_at_indices(m::IndusGroundwater, name::String, dest, inds) =
+BMI.get_value_ptr(m::GroundwaterModel, name::String) = vec(var_array(m, name))
+BMI.get_value(m::GroundwaterModel, name::String, dest) = copyto!(dest, vec(var_array(m, name)))
+BMI.get_value_at_indices(m::GroundwaterModel, name::String, dest, inds) =
     copyto!(dest, vec(var_array(m, name))[inds])
 
-function BMI.set_value(m::IndusGroundwater, name::String, value)
+function BMI.set_value(m::GroundwaterModel, name::String, value)
     length(value) == length(m.recharge) || error("$name needs $(length(m.recharge)) values, got $(length(value))")
     name == "groundwater_recharge" ? set_recharge!(m, value) :
     name == "river_discharge" ? set_discharge!(m, value) :
@@ -98,34 +98,34 @@ function BMI.set_value(m::IndusGroundwater, name::String, value)
     return nothing
 end
 
-function BMI.set_value_at_indices(m::IndusGroundwater, name::String, inds, value)
+function BMI.set_value_at_indices(m::GroundwaterModel, name::String, inds, value)
     full = copy(vec(var_array(m, name)))
     full[inds] .= value
     BMI.set_value(m, name, full)
 end
 
-BMI.get_grid_rank(::IndusGroundwater, grid::Int) = grid == 0 ? 2 : 3
-BMI.get_grid_size(m::IndusGroundwater, grid::Int) = length(m.recharge) * (grid == 0 ? 1 : 2)
-BMI.get_grid_type(::IndusGroundwater, ::Int) = "uniform_rectilinear"
+BMI.get_grid_rank(::GroundwaterModel, grid::Int) = grid == 0 ? 2 : 3
+BMI.get_grid_size(m::GroundwaterModel, grid::Int) = length(m.recharge) * (grid == 0 ? 1 : 2)
+BMI.get_grid_type(::GroundwaterModel, ::Int) = "uniform_rectilinear"
 
-function BMI.get_grid_shape(m::IndusGroundwater, grid::Int)
+function BMI.get_grid_shape(m::GroundwaterModel, grid::Int)
     ncol, nrow = size(m.inputs)
     return grid == 0 ? [nrow, ncol] : [2, nrow, ncol]
 end
 
-BMI.get_grid_shape(m::IndusGroundwater, grid::Int, shape::AbstractVector{Int}) =
+BMI.get_grid_shape(m::GroundwaterModel, grid::Int, shape::AbstractVector{Int}) =
     copyto!(shape, BMI.get_grid_shape(m, grid))
 
-function BMI.get_grid_spacing(m::IndusGroundwater, grid::Int, spacing::AbstractVector{Float64})
+function BMI.get_grid_spacing(m::GroundwaterModel, grid::Int, spacing::AbstractVector{Float64})
     s = m.inputs
     dlat, dlon = s.lat[2] - s.lat[1], s.lon[2] - s.lon[1]
     return copyto!(spacing, grid == 0 ? [dlat, dlon] : [1.0, dlat, dlon])
 end
 
-function BMI.get_grid_origin(m::IndusGroundwater, grid::Int, origin::AbstractVector{Float64})
+function BMI.get_grid_origin(m::GroundwaterModel, grid::Int, origin::AbstractVector{Float64})
     s = m.inputs
     return copyto!(origin, grid == 0 ? [s.lat[1], s.lon[1]] : [0.0, s.lat[1], s.lon[1]])
 end
 
-BMI.get_grid_x(m::IndusGroundwater, ::Int, x::AbstractVector{Float64}) = copyto!(x, m.inputs.lon)
-BMI.get_grid_y(m::IndusGroundwater, ::Int, y::AbstractVector{Float64}) = copyto!(y, m.inputs.lat)
+BMI.get_grid_x(m::GroundwaterModel, ::Int, x::AbstractVector{Float64}) = copyto!(x, m.inputs.lon)
+BMI.get_grid_y(m::GroundwaterModel, ::Int, y::AbstractVector{Float64}) = copyto!(y, m.inputs.lat)

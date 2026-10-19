@@ -1,6 +1,6 @@
 #= Shared functions of the mGV <-> MODFLOW coupling, used by couple_mgv.jl and
 spinup_steady_state.jl. See couple_mgv.jl for what is exchanged and when. =#
-using IndusModflow, Dates, Printf
+using ModflowCoupling, Dates, Printf
 import BasicModelInterface as BMI
 import mGV
 

@@ -1,26 +1,24 @@
-const TIME_UNITS = "days since 1979-01-01 00:00:00"
-
 """
     write_monthly_output(model)
 
-Append the completed stress period to `output_dir/indus_modflow_monthly.nc`
-(`indus_modflow_daily.nc` with `period = "day"`) and, at the end of each month,
+Append the completed stress period to `output_dir/modflow_monthly.nc`
+(`modflow_daily.nc` with `period = "day"`; time in days since the first period) and, at the end of each month,
 write a restart head `output_dir/head_YYYYMMDD.nc` (end-of-month date, variable
 `gwl`, Float64) that `initial_head_file` accepts.
 """
-function write_monthly_output(m::IndusGroundwater)
+function write_monthly_output(m::GroundwaterModel)
     dir = m.config.output_dir
     mkpath(dir)
     s = m.inputs
     start = m.periods[m.completed]
     stop = start + period_step(m.config) - Day(1)
 
-    path = joinpath(dir, m.config.period == "day" ? "indus_modflow_daily.nc" : "indus_modflow_monthly.nc")
+    path = joinpath(dir, m.config.period == "day" ? "modflow_daily.nc" : "modflow_monthly.nc")
     m.completed == 1 && isfile(path) && rm(path)
-    ds = isfile(path) ? NCDataset(path, "a") : create_monthly_file(path, s)
+    ds = isfile(path) ? NCDataset(path, "a") : create_monthly_file(path, s, m.periods[1])
     try
         n = length(ds["time"]) + 1
-        ds["time"][n] = Dates.value(start - Date(1979, 1, 1))
+        ds["time"][n] = Dates.value(start - m.periods[1])
         ds["groundwater_head"][:, :, :, n] = m.head
         ds["baseflow_to_routing"][:, :, n] = m.baseflow
         ds["capillary_rise"][:, :, n] = m.capillary
@@ -41,7 +39,7 @@ end
 Write the current heads of both layers to `path` (variable `gwl`, Float64, NaN
 on inactive cells), in the form `initial_head_file` accepts.
 """
-function write_head(m::IndusGroundwater, path::AbstractString;
+function write_head(m::GroundwaterModel, path::AbstractString;
                     long_name = "groundwater head", attrib = Pair{String,Any}[])
     s = m.inputs
     mkpath(dirname(abspath(path)))
@@ -55,25 +53,25 @@ function write_head(m::IndusGroundwater, path::AbstractString;
     return path
 end
 
-function create_monthly_file(path, s::StaticInputs)
+function create_monthly_file(path, s::StaticInputs, first_period::Date)
     ds = NCDataset(path, "c")
     defDim(ds, "time", Inf)
     defVar(ds, "lon", s.lon, ("lon",); attrib = ["units" => "degrees_east"])
     defVar(ds, "lat", s.lat, ("lat",); attrib = ["units" => "degrees_north"])
     defVar(ds, "layer", [0, 1], ("layer",))
     defVar(ds, "time", Float64, ("time",);
-           attrib = ["units" => TIME_UNITS, "calendar" => "standard",
+           attrib = ["units" => "days since $first_period 00:00:00", "calendar" => "standard",
                      "long_name" => "first day of the stress period"])
     grid2 = ("lon", "lat", "time")
     defVar(ds, "groundwater_head", Float64, ("lon", "lat", "layer", "time");
            attrib = ["units" => "m", "long_name" => "head at end of stress period"], fillvalue = NaN)
     defVar(ds, "baseflow_to_routing", Float64, grid2;
-           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV + DRN flow)/86400, VIC routing forcing for the next period"], fillvalue = NaN)
+           attrib = ["units" => "m3 s-1", "long_name" => "-(RIV + DRN flow)/86400, routing forcing for the next period"], fillvalue = NaN)
     defVar(ds, "capillary_rise", Float64, grid2;
-           attrib = ["units" => "mm per stress period", "long_name" => "EVT outflow depth, added to the next VIC period's state"], fillvalue = NaN)
+           attrib = ["units" => "mm per stress period", "long_name" => "EVT outflow depth, added to the next land-surface period's state"], fillvalue = NaN)
     defVar(ds, "groundwater_recharge", Float64, grid2;
-           attrib = ["units" => "m d-1", "long_name" => "VIC recharge input for the stress period"], fillvalue = NaN)
+           attrib = ["units" => "m d-1", "long_name" => "recharge input for the stress period"], fillvalue = NaN)
     defVar(ds, "river_discharge", Float64, grid2;
-           attrib = ["units" => "m3 s-1", "long_name" => "VIC discharge input for the stress period"], fillvalue = NaN)
+           attrib = ["units" => "m3 s-1", "long_name" => "discharge input for the stress period"], fillvalue = NaN)
     return ds
 end

@@ -1,17 +1,20 @@
 #=
 Template for the monthly VIC–MODFLOW loop with a BMI-enabled Julia VIC.
 The VIC-side names (`VICModel`, its variable names, month stepping) are
-placeholders: replace them once the Julia VIC BMI is fixed.
+placeholders: replace them once the Julia VIC BMI is fixed. For a working
+daily coupling with mGV, see examples/mgv_coupling.
+
+    julia --project=. scripts/couple_vic_template.jl <modflow_config.toml>
 
 Timing (coupling_contract.md): VIC runs month M, MODFLOW runs month M with
 VIC's month-M fields, and MODFLOW's month-M feedback is consumed by VIC in M+1.
 =#
-using IndusModflow, Dates
+using ModflowCoupling, Dates
 import BasicModelInterface as BMI
 
 # using VIC                                           # placeholder
-# vic = BMI.initialize(VIC.VICModel, "vic_indus_natural_foc.toml")
-gw = BMI.initialize(IndusGroundwater, joinpath(@__DIR__, "indus_natural_foc.toml"))
+# vic = BMI.initialize(VIC.VICModel, "vic_config.toml")
+gw = BMI.initialize(GroundwaterModel, ARGS[1])
 
 # VIC grid coordinates, used to align exchanged fields by coordinate (not by shape)
 # vic_lon = BMI.get_grid_x(vic, grid, zeros(nlon)); vic_lat = BMI.get_grid_y(vic, grid, zeros(nlat))

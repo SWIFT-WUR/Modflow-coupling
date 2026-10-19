@@ -12,14 +12,15 @@ struct Mf6Pointers
 end
 
 """
-    IndusGroundwater
+    GroundwaterModel
 
-MODFLOW 6 groundwater model of the Indus basin, advanced one stress period (a
-calendar month, or a day with `period = "day"`) per `BMI.update`. Set the
-period's VIC fields before calling `update`; afterwards the outputs describe the
-end of that period and are meant for the *next* VIC period.
+MODFLOW 6 groundwater model of the domain given by `config.inputs`, advanced
+one stress period (a calendar month, or a day with `period = "day"`) per
+`BMI.update`. Set the period's land-surface fields (mGV, VIC) before calling
+`update`; afterwards the outputs describe the end of that period and are meant
+for the *next* land-surface period.
 """
-mutable struct IndusGroundwater
+mutable struct GroundwaterModel
     config::Config
     inputs::StaticInputs
     params::StaticParameters
@@ -43,17 +44,17 @@ end
 const ACTIVE_MODEL = Ref{Any}(nothing)
 
 """
-    IndusGroundwater(config)
+    GroundwaterModel(config)
 
 Read inputs, build parameters, write the MF6 simulation and initialize libmf6.
 Only one MODFLOW 6 instance can be active per Julia process; a model that is
 still active is finalized first.
 """
-function IndusGroundwater(config::Config)
+function GroundwaterModel(config::Config)
     ACTIVE_MODEL[] === nothing || finalize!(ACTIVE_MODEL[])
     inputs = read_static_inputs(config)
     params = build_parameters(inputs, config)
-    failed = [name for (name, ok) in audit_static_inputs(inputs, params) if !ok]
+    failed = [name for (name, ok) in audit_static_inputs(inputs, params, config) if !ok]
     isempty(failed) || error("static input audit failed:\n  " * join(failed, "\n  "))
     periods = stress_periods(config)
     write_simulation(config, inputs, params, periods)
@@ -64,7 +65,7 @@ function IndusGroundwater(config::Config)
     for l in 1:2
         view(head, :, :, l)[active] .= view(params.initial_head, :, :, l)[active]
     end
-    model = IndusGroundwater(
+    model = GroundwaterModel(
         config, inputs, params, periods, nothing, nothing,
         zeros(grid), zeros(grid), zeros(grid),
         head, fill(NaN, grid), zeros(grid), 0, Float64[], Set{Symbol}(),
@@ -78,7 +79,7 @@ function mf6_pointer(mf, component, var; sub = "")
     return BMI.get_value_ptr(mf, MF.get_var_address(mf, var, component; subcomponent_name = sub))
 end
 
-function initialize_mf6!(m::IndusGroundwater)
+function initialize_mf6!(m::GroundwaterModel)
     mf = ModflowModel(m.config.work_dir)
     BMI.initialize(mf)
     m.mf = mf
@@ -111,7 +112,7 @@ the BMI boundary arrays follow the record order of `write_simulation`, and
 record how MF6 stored the placeholder RCH rate of 1.0 (MF6 6.3 multiplies it by
 the cell area on reading, so a rate set through BMI must be scaled the same way).
 """
-function calibrate_bmi!(m::IndusGroundwater)
+function calibrate_bmi!(m::GroundwaterModel)
     p, ptr = m.params, m.ptr
     lin = LinearIndices(m.inputs.idomain)
     function check(pkg, cells)
@@ -131,24 +132,24 @@ function calibrate_bmi!(m::IndusGroundwater)
 end
 
 "Date of the first day of the next stress period to run."
-current_date(m::IndusGroundwater) =
+current_date(m::GroundwaterModel) =
     m.completed < length(m.periods) ? m.periods[m.completed + 1] : m.periods[end] + period_step(m.config)
 
-function set_recharge!(m::IndusGroundwater, recharge::AbstractArray)
+function set_recharge!(m::GroundwaterModel, recharge::AbstractArray)
     m.recharge .= reshape(recharge, size(m.recharge))
     replace!(x -> isfinite(x) ? x : 0.0, m.recharge)
     push!(m.inputs_set, :recharge)
     return m
 end
 
-function set_discharge!(m::IndusGroundwater, discharge::AbstractArray)
+function set_discharge!(m::GroundwaterModel, discharge::AbstractArray)
     m.discharge .= reshape(discharge, size(m.discharge))
     replace!(x -> isfinite(x) ? x : 0.0, m.discharge)
     push!(m.inputs_set, :discharge)
     return m
 end
 
-function set_abstraction!(m::IndusGroundwater, abstraction::AbstractArray)
+function set_abstraction!(m::GroundwaterModel, abstraction::AbstractArray)
     a = reshape(abstraction, size(m.abstraction))
     all(isfinite, a) || error("groundwater abstraction contains non-finite values")
     all(>=(0), a) || error("groundwater abstraction must be a non-negative extraction rate")
@@ -161,7 +162,7 @@ function set_abstraction!(m::IndusGroundwater, abstraction::AbstractArray)
 end
 
 "Write the period's RCH, RIV and WEL values into MF6 memory."
-function apply_stresses!(m::IndusGroundwater)
+function apply_stresses!(m::GroundwaterModel)
     p, ptr = m.params, m.ptr
     for (i, c) in enumerate(p.rch_cells)
         ptr.rch_bound[1, i] = max(0.0, m.recharge[c] * p.area_factor[c]) * m.rch_scale[i]
@@ -178,7 +179,7 @@ function apply_stresses!(m::IndusGroundwater)
 end
 
 "Read heads and exchange fluxes of the completed stress period."
-function collect_outputs!(m::IndusGroundwater)
+function collect_outputs!(m::GroundwaterModel)
     p, ptr, s = m.params, m.ptr, m.inputs
     fill!(m.head, NaN)
     for (n, u) in zip(eachindex(ptr.head), ptr.nodeuser)
@@ -210,7 +211,7 @@ function collect_outputs!(m::IndusGroundwater)
 end
 
 "Advance one stress period."
-function advance!(m::IndusGroundwater)
+function advance!(m::GroundwaterModel)
     m.completed < length(m.periods) || error("simulation already reached $(m.config.end_date)")
     date = m.periods[m.completed + 1]
     if !isempty(m.config.forcing_file)
@@ -239,10 +240,10 @@ function advance!(m::IndusGroundwater)
 end
 
 "Raw MF6 boundary flows (m3/day) of a package, in record order."
-package_flows(m::IndusGroundwater, package::AbstractString) =
+package_flows(m::GroundwaterModel, package::AbstractString) =
     copy(vec(mf6_pointer(m.mf, m.config.model_name, "SIMVALS"; sub = uppercase(package))))
 
-function finalize!(m::IndusGroundwater)
+function finalize!(m::GroundwaterModel)
     if m.mf !== nothing
         m.ptr = nothing
         BMI.finalize(m.mf)

@@ -1,0 +1,52 @@
+# Indus natural FOC run (reference_cases.md, Case 1/2) on the 5 arcmin Indus
+# grid. Relative paths are resolved against this file's directory; the other
+# Indus configs in this directory `extend` this one.
+model_name = "INDUS"
+
+[paths]
+data_dir = "../../../data"
+work_dir = "../../run/natural_foc/mf6"
+output_dir = "../../run/natural_foc/output"
+# initial_head_file = "../../run/natural_foc/output/head_19790131.nc"   # restart
+
+[time]
+start_date = 1979-01-01
+end_date = 1979-03-31
+
+[coupling]
+foc = true       # EVT package + capillary-rise feedback
+pumping = false  # WEL package (human extension)
+
+[output]
+write_monthly = true
+save_mf6_binary = false
+
+# [solver]  # defaults follow the Python reference
+# outer_dvclose = 5.0
+# inner_dvclose = 5.0
+# inner_rclose = 10.0
+
+# Static inputs, relative to data_dir. The latitude storage order of each file
+# was verified with physical fingerprints (README.md in this directory). The
+# labels are right except in dem and landmask: their data are stored
+# south-first under north-first labels.
+[inputs]
+ibound = "ibound_indus_normalized.nc"
+landmask = { file = "landmask_indus.nc", lat_order = "south_first" }
+dem = { file = "dem_ini_indus.nc", lat_order = "south_first" }
+aqdepth = "aqdepth_ini_indus.nc"
+cell_area = "cell_area_indus.nc"
+ksat_log = "ksat_log_indus.nc"
+ksat_l1_conf_log = "ksat_l1_conf_log_indus.nc"
+ksat_l2_conf_log = "ksat_l2_conf_log_indus.nc"
+spe_yi = "spe_yi_inp_indus.nc"
+qbank = "bankfull_discharge_indus.nc"
+riv_slope = "riv_slope_indus.nc"
+min_dem = "min_dem_indus.nc"
+z0_floodplain = "Z0_floodplain_indus_updated.nc"
+kq3 = "KQ3_indus.nc"
+catchment = "ldd_indus_updated.nc"   # catchment ids, not flow directions
+cpsurface = { file = "capillary_rise_indus.nc", variable = "cpsurface" }
+cprate = { file = "capillary_rise_indus.nc", variable = "cprate" }
+cpdistinct = { file = "capillary_rise_indus.nc", variable = "cpdistinct" }
+steady_head = "mf_ss_gwl_5minDRN.nc"   # global steady state, cut to the grid

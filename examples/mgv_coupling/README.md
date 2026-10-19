@@ -6,10 +6,11 @@ Files:
 - `spinup_steady_state.jl` computes steady-state groundwater heads to start from
   (see "Starting heads" below).
 - `coupling.jl` holds the functions both scripts share.
-- `indus_daily.toml` is a daily MODFLOW config that starts from the stored
-  steady-state heads.
+- `../indus/mgv_daily.toml` is a daily MODFLOW config for the Indus that starts
+  from the stored steady-state heads. For another domain, write a config with
+  that domain's `[inputs]` and `period = "day"` (see the main README).
 
-`couple_mgv.jl` runs IndusModflow and [mGV](https://github.com/SWIFT-WUR/mGV)
+`couple_mgv.jl` runs the ModflowCoupling MODFLOW model and [mGV](https://github.com/SWIFT-WUR/mGV)
 in one Julia process and exchanges the fields of `coupling_contract.md` through
 BMI, in both directions, every day. It replaces the monthly file exchange of
 the Python plugin. MODFLOW runs daily stress periods for this: set
@@ -18,7 +19,7 @@ matches the Python reference).
 
 ## mGV → MODFLOW
 
-| mGV BMI variable | IndusModflow input | Python plugin equivalent |
+| mGV BMI variable | MODFLOW input | Python plugin equivalent |
 | --- | --- | --- |
 | `channel_water__volume_flow_rate` (m3 s-1) | `river_discharge` (m3 s-1) | `OUT_DISCHARGE` |
 | `land_subsurface__runoff` (mm day-1) ÷ 1000 | `groundwater_recharge` (m day-1) | `OUT_GWRECHARGE` |
@@ -33,7 +34,7 @@ the natural case of the contract has no pumping.
 
 ## MODFLOW → mGV
 
-| IndusModflow output | mGV BMI variable | Python plugin equivalent |
+| MODFLOW output | mGV BMI variable | Python plugin equivalent |
 | --- | --- | --- |
 | `baseflow_to_routing` (m3 s-1) | `channel_water__area~cross-sectional` (m2): `+= baseflow · dt / channel__length` before the next mGV step | `discharge_mf` forcing for the VIC-WUR routing plugin |
 | `capillary_rise` (mm day-1) | `soil__moisture_layer_N`, bottom layer (mm); excess moved up a layer at a time against `soil__moisture~maximum_layer_N` | `vic_runner.update_statefile` on `STATE_SOIL_MOISTURE` |
@@ -58,10 +59,10 @@ cd /path/to/mGV
 git switch mgv-to-modflow-coupling
 # and set `external_groundwater_routing = true` under [API] in the mGV config
 
-cd /path/to/IndusModflow
+cd /path/to/ModflowCoupling
 julia --project=examples/mgv_coupling -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="/path/to/mGV")])'
 julia --project=examples/mgv_coupling examples/mgv_coupling/couple_mgv.jl \
-    /path/to/mGV/configs/indus_config.toml examples/mgv_coupling/indus_daily.toml
+    /path/to/mGV/configs/indus_config.toml examples/indus/mgv_daily.toml
 ```
 
 The MODFLOW config must have `period = "day"` under `[time]`; the script stops
@@ -78,12 +79,12 @@ MODFLOW in steady state with the mean recharge and river discharge of that run
 
 ```bash
 julia --project=examples/mgv_coupling examples/mgv_coupling/spinup_steady_state.jl \
-    /path/to/mGV/configs/indus_1975_1984.toml examples/mgv_coupling/indus_daily.toml \
+    /path/to/mGV/configs/indus_1975_1984.toml examples/indus/mgv_daily.toml \
     ../data/steady_head_mgv_coupled.nc 5
 ```
 
 It writes the heads (variable `gwl`, the form `initial_head_file` reads) and
-the mean forcing (`..._forcing.nc`). `indus_daily.toml` points
+the mean forcing (`..._forcing.nc`). `mgv_daily.toml` points
 `initial_head_file` at `../data/steady_head_mgv_coupled.nc`, which holds the
 result for 1975–1984 forcing (GFDL-ESM4 historical) after five iterations,
 starting from the global steady state, with the DRN package and river bottoms
@@ -121,7 +122,7 @@ precedence over a `forcing_file` in the MODFLOW config.
 
 - MODFLOW does not route the river. It uses mGV's discharge only to set the
   river stage of its RIV package, through its own channel geometry (width from
-  bankfull discharge, `riv_slope_indus.nc`). That geometry differs from mGV's
+  bankfull discharge, the `riv_slope` input). That geometry differs from mGV's
   routing (width from upstream area, its own slopes), so MODFLOW's stage is not
   the depth of the water in mGV's channel.
 - With `external_groundwater_routing = true`, mGV's rivers carry only surface

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "cc418e822e0532a1c362a43f8c7c02a40903495f"
+project_hash = "5e2e171f3de2bd8710b84bae77d72495fa23491c"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -102,12 +102,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "XML2_jll", "Xorg_libpciaccess_jll"
 git-tree-sha1 = "c35847ca5b4997fc8418836354a56c459bcf48d8"
 uuid = "e33a78d0-f292-5ffc-b300-72abe9b543c8"
 version = "2.14.0+0"
-
-[[deps.IndusModflow]]
-deps = ["BasicModelInterface", "Dates", "ModflowInterface", "NCDatasets", "Printf"]
-path = "."
-uuid = "5b8c2f1e-3d4a-4c7e-9f21-6a0e8d7b4c13"
-version = "0.1.0"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]
@@ -224,6 +218,12 @@ deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pk
 git-tree-sha1 = "c77204b3ac867f72b68192c7580c5b7224fc3fd9"
 uuid = "81230ed9-c869-5493-bf63-2c1575eaf49b"
 version = "6.3.0+0"
+
+[[deps.ModflowCoupling]]
+deps = ["BasicModelInterface", "Dates", "ModflowInterface", "NCDatasets", "Statistics", "TOML"]
+path = "."
+uuid = "5b8c2f1e-3d4a-4c7e-9f21-6a0e8d7b4c13"
+version = "0.1.0"
 
 [[deps.ModflowInterface]]
 deps = ["BasicModelInterface", "Modflow6_jll", "Printf"]

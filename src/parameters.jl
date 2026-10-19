@@ -91,7 +91,7 @@ function hydraulic_parameters(s::StaticInputs, aqdepth)
     k = cat(nan_to(kh1, 20.0), nan_to(kh2, 20.0); dims = 3)
     k33 = cat(nan_to(kv1, 20.0), nan_to(kv2, 20.0); dims = 3)
 
-    # `missingvalue` in the reference is aqdepth_ini[0][0], which is NaN for Indus.
+    # `missingvalue` in the reference is aqdepth_ini[0][0], NaN for the Indus inputs.
     sy = [lm ? x : NaN for (lm, x) in zip(s.landmask, s.spe_yi)]
     sy = max.(min.(max.(0.01, sy), 1.0), 0.11)
     sy = nan_to(sy, 0.1)
@@ -191,7 +191,7 @@ function chd_parameters(s::StaticInputs)
     cells = findall(==(2), s.idomain)
     head = [s.steady_head[c, l] for c in cells, l in 1:2]
     bad = count(!isfinite, head)
-    bad == 0 || error("$bad CHD cells have no finite global steady-state head")
+    bad == 0 || error("$bad CHD cell heads are not finite: the `steady_head` input must cover all idomain == 2 cells")
     return cells, head
 end
 
@@ -244,36 +244,36 @@ function build_parameters(s::StaticInputs, config::Config)
 end
 
 """
-    audit_static_inputs(inputs, params) -> Vector{Pair{String,Bool}}
+    audit_static_inputs(inputs, params, config) -> Vector{Pair{String,Bool}}
 
-Case 0 static audit (reference_cases.md) plus orientation fingerprints.
+Static checks of the inputs and package data (Case 0 of reference_cases.md),
+plus orientation fingerprints that hold for any domain when
+`config.check_orientation` is set. A failed check stops the model build.
+Dataset-specific fingerprints belong in that dataset's tests (see
+`test/runtests.jl` for the Indus case).
 """
-function audit_static_inputs(s::StaticInputs, p::StaticParameters)
+function audit_static_inputs(s::StaticInputs, p::StaticParameters, config::Config)
     active = s.idomain .> 0
-    rowmean_area = vec(sum(s.cell_area; dims = 1)) ./ size(s.cell_area, 1)
-    land = s.landmask .& isfinite.(s.steady_head[:, :, 1]) .& isfinite.(s.dem)
-    sukkur = CartesianIndex(argmin(abs.(s.lon .- 68.87)), argmin(abs.(s.lat .- 27.7)))
-    window = CartesianIndices((sukkur[1]-2:sukkur[1]+2, sukkur[2]-2:sukkur[2]+2))
     checks = [
-        "grid is 180 rows x 204 columns" => size(s) == (204, 180),
         "idomain only contains 0, 1, 2" => all(in((0, 1, 2)), s.idomain),
         "all idomain == 2 cells have finite heads in both layers" =>
-            all(isfinite, s.steady_head[s.idomain .== 2, :]),
+            all(isfinite, p.chd_head),
         "true cell area positive on active cells" => all(>(0), s.cell_area[active]),
         "DIS top above both layer bottoms on active cells" =>
             all(p.top[active] .> p.botm[:, :, 1][active] .> p.botm[:, :, 2][active]),
         "package arrays finite" => all(isfinite, p.k) && all(isfinite, p.k33) && all(isfinite, p.ss) &&
             all(isfinite, p.botm) && all(isfinite, p.initial_head),
-        "orientation: cell area decreases northward" => issorted(rowmean_area; rev = true),
-        "orientation: DEM correlates with global steady head" =>
-            cor(s.dem[land], s.steady_head[:, :, 1][land]) > 0.8,
-        "orientation: bankfull discharge > 5000 m3/s near Sukkur" => maximum(s.qbank[window]) > 5000,
-        "orientation: bankfull discharge > 10 m3/s only on land" => all(s.landmask[s.qbank .> 10]),
-        "orientation: Indus main stem in one catchment" => let ids = s.catchment[s.qbank .> 1000]
-            maximum(count(==(u), ids) for u in unique(ids)) / length(ids) > 0.9
-        end,
-        "DRN on at least 95% of active land cells" =>
-            length(p.drain.cells) >= 0.95 * count(s.landmask .& active),
     ]
+    config.check_orientation || return checks
+
+    # Cell area follows cos(latitude); skipped where it hardly varies (small domains near the equator)
+    rowmean_area = [mean(filter(isfinite, col)) for col in eachcol(s.cell_area)]
+    area_varies = length(s.lat) > 2 && (maximum(rowmean_area) - minimum(rowmean_area)) > 1e-4 * maximum(rowmean_area)
+    push!(checks, "orientation: cell area follows cos(latitude)" =>
+        !area_varies || cor(rowmean_area, cosd.(s.lat)) > 0.9)
+    land = s.landmask .& isfinite.(s.steady_head[:, :, 1]) .& isfinite.(s.dem)
+    count(land) >= 100 && push!(checks, "orientation: DEM correlates with steady head" =>
+        cor(s.dem[land], s.steady_head[:, :, 1][land]) > 0.8)
+    push!(checks, "orientation: bankfull discharge > 10 m3/s only on land" => all(s.landmask[s.qbank .> 10]))
     return checks
 end

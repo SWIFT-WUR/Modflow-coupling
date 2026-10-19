@@ -1,53 +1,18 @@
 #=
 Grid convention
 ---------------
-All 2D arrays are `(ncol, nrow) = (lon, lat)` with latitude ascending, i.e. the
-storage order of `ibound_indus_normalized.nc`. Julia's column-major order then
+All 2D arrays are `(ncol, nrow) = (lon, lat)` with latitude ascending: the grid
+of the `ibound` input, sorted south-first. Julia's column-major order then
 equals MODFLOW 6 DIS node order (column fastest), so MODFLOW row 1 is the
 southernmost row. With a uniform DIS without georeference the mirrored y-axis
 has no physical effect.
 
-Latitude storage order of the static inputs
--------------------------------------------
-The static NetCDF files do NOT share one latitude storage order, and two of them
-(`dem_ini_indus.nc`, `landmask_indus.nc`) carry descending latitude labels while
-their data are stored south-first. Coordinate labels can therefore not be used to
-align them. The table below records the verified storage order of each field
-(2026-09-28), established with physical fingerprints independent of the labels:
-
-- cell area must decrease northward (cos(lat));
-- elevation fields must correlate with the geographically referenced global
-  steady-state head (r ≈ 0.96 south-first, negative when mirrored);
-- `qbank` must peak on the lower Indus main stem (Sukkur, Hyderabad);
-- `riv_slope` must correlate with the DEM gradient (r = 0.79 vs -0.26);
-- sea cells (SW corner) must be missing in `aqdepth`, `ksat_log`, `spe_yi`;
-- the Indus main stem (`qbank` > 1000 m³/s) must lie in one `ldd` catchment
-  (0.97 north-first vs 0.76 mirrored, 2026-10-16);
-- log `KQ3` must correlate with aquifer depth (r = 0.59 vs 0.18) and permeability.
-
-`audit_static_inputs` repeats the cheap fingerprints on every model build.
-The Python reference combined raw `.values` and therefore mirrored the
-north-first fields against `ibound`.
+Every other input is selected at the ibound cell centres by coordinate, so it
+may cover a larger area (a basin cut from global maps). Latitude labels are
+trusted unless the config sets `lat_order` for that input: some datasets carry
+wrong labels (examples/indus/README.md), and `audit_static_inputs` checks the
+orientation with physical fingerprints on every model build.
 =#
-const STORAGE_ORDER = Dict(
-    "ibound" => :south_first,
-    "dem" => :south_first,          # lat labels say north-first: labels are wrong
-    "landmask" => :south_first,     # lat labels say north-first: labels are wrong
-    "min_dem" => :south_first,
-    "z0_floodplain" => :south_first,
-    "capillary" => :south_first,    # cpsurface, cprate, cpdistinct (max_moist is north-first)
-    "aqdepth" => :north_first,
-    "cell_area" => :north_first,
-    "ksat_log" => :north_first,
-    "ksat_l1_conf_log" => :north_first,
-    "ksat_l2_conf_log" => :north_first,
-    "spe_yi" => :north_first,
-    "qbank" => :north_first,
-    "riv_slope" => :north_first,
-    "kq3" => :north_first,
-    "ldd" => :north_first,          # catchment ids, not flow directions
-)
-
 "Static inputs aligned to the model grid. Missing values are NaN."
 struct StaticInputs
     lon::Vector{Float64}
@@ -71,8 +36,8 @@ struct StaticInputs
     cprate::Matrix{Float64}
     cpdistinct::Matrix{Float64}
     kq3::Matrix{Float64}            # groundwater recession constant, 1/day
-    catchment::Matrix{Float64}      # catchment id (`ldd_indus_updated.nc`)
-    steady_head::Array{Float64,3}
+    catchment::Matrix{Float64}      # catchment id
+    steady_head::Array{Float64,3}   # NaN without a `steady_head` input
 end
 
 Base.size(s::StaticInputs) = size(s.idomain)
@@ -80,27 +45,52 @@ Base.size(s::StaticInputs) = size(s.idomain)
 "Convert raw NetCDF values to Float64, mapping missing, non-finite and fill values (≥ 1e30) to NaN."
 to_float(x) = ismissing(x) || !isfinite(x) || abs(x) >= 1e30 ? NaN : Float64(x)
 
-"""
-    read_field(path, var, order, lon, lat) -> Matrix{Float64}
+const LON_NAMES = ("lon", "longitude", "x")
+const LAT_NAMES = ("lat", "latitude", "y")
 
-Read a `(lat, lon)` NetCDF variable as a `(lon, lat)` array in model-grid order.
-Longitudes must match the grid; latitudes are only checked as a set because
-some files carry wrong latitude labels (see `STORAGE_ORDER`).
+"Name of the data variable of `spec`: the given one, or the only non-coordinate variable with ≥ 2 dims."
+function data_variable(ds, spec::InputSpec, path)
+    isempty(spec.variable) || return spec.variable
+    names = [k for k in keys(ds) if ndims(ds[k]) >= 2 && !(k in LON_NAMES) && !(k in LAT_NAMES)]
+    length(names) == 1 || error("$path holds $(length(names)) data variables ($(join(names, ", "))): set `variable`")
+    return only(names)
+end
+
 """
-function read_field(path, var, order::Symbol, lon, lat; atol = 1e-3)
+File coordinates of variable `v`: longitudes, and latitudes in storage order
+(sorted per `lat_order` when the labels are untrusted).
+"""
+function file_coordinates(ds, v, path, lat_order::Symbol)
+    dims = dimnames(v)
+    (length(dims) >= 2 && dims[1] in LON_NAMES && dims[2] in LAT_NAMES) ||
+        error("$path:$(name(v)) has dims $dims, expected (lon, lat, ...) in Julia order")
+    flon = Float64.(ds[dims[1]][:])
+    flat = Float64.(ds[dims[2]][:])
+    lat_order === :south_first && sort!(flat)
+    lat_order === :north_first && sort!(flat; rev = true)
+    return flon, flat
+end
+
+"""
+    read_field(path, spec, lon, lat; tol = 1e-3) -> Array{Float64}
+
+Read the variable of `spec` (dims `(lon, lat[, layer])`) at the grid
+coordinates `lon`, `lat` by nearest-coordinate selection. Every grid coordinate
+must have a file coordinate within `tol` degrees; matching shapes alone are not
+accepted as proof of identical cell order.
+"""
+function read_field(path, spec::InputSpec, lon, lat; tol = 1e-3)
     NCDataset(path) do ds
-        v = ds[var]
-        dimnames(v) == ("lon", "lat") ||
-            error("$path:$var has dims $(dimnames(v)), expected (lon, lat) in Julia order")
-        flon = Float64.(ds["lon"][:])
-        flat = Float64.(ds["lat"][:])
-        (length(flon), length(flat)) == (length(lon), length(lat)) ||
-            error("$path:$var has shape $(size(v)), expected $((length(lon), length(lat)))")
-        maximum(abs.(flon .- lon)) <= atol || error("$path: longitudes do not match the ibound grid")
-        maximum(abs.(sort(flat) .- lat)) <= atol || error("$path: latitudes do not match the ibound grid")
-        a = to_float.(v[:, :])
-        order === :north_first && reverse!(a; dims = 2)
-        a
+        v = ds[data_variable(ds, spec, path)]
+        flon, flat = file_coordinates(ds, v, path, spec.lat_order)
+        ii = [nearest_index(flon, x; tol) for x in lon]
+        jj = [nearest_index(flat, y; tol) for y in lat]
+        (i1, i2), (j1, j2) = extrema(ii), extrema(jj)
+        rest = ntuple(_ -> Colon(), ndims(v) - 2)
+        block = v[i1:i2, j1:j2, rest...]
+        nlay = size(block, 3)
+        a = [to_float(block[i - i1 + 1, j - j1 + 1, l]) for i in ii, j in jj, l in 1:nlay]
+        ndims(v) == 2 ? a[:, :, 1] : a
     end
 end
 
@@ -118,58 +108,46 @@ function nearest_index(coords::AbstractVector, x; tol)
 end
 
 """
-    select_global_head(path, lon, lat) -> Array{Float64,3}
-
-Two-layer global steady-state head at the grid coordinates by nearest-neighbour
-selection, as `config_module._get_non_global_steady_head` does. NaNs are kept.
+Model grid from the ibound input: longitudes (ascending) and latitudes sorted
+south-first, and the uniform DIS spacing in metres (degrees × 111 km, as
+`config.delrow/delcol` of the Python reference).
 """
-function select_global_head(path, lon, lat)
+function read_grid(path, spec::InputSpec)
     NCDataset(path) do ds
-        v = ds["gwd"]
-        dimnames(v) == ("longitude", "latitude", "layer") ||
-            error("$path:gwd has dims $(dimnames(v))")
-        glon = Float64.(ds["longitude"][:])
-        glat = Float64.(ds["latitude"][:])
-        tol_lon = 0.6 * abs(glon[2] - glon[1])
-        tol_lat = 0.6 * abs(glat[2] - glat[1])
-        ii = [nearest_index(glon, x; tol = tol_lon) for x in lon]
-        jj = [nearest_index(glat, y; tol = tol_lat) for y in lat]
-        (i1, i2), (j1, j2) = extrema(ii), extrema(jj)
-        block = v[i1:i2, j1:j2, :]
-        [to_float(block[i - i1 + 1, j - j1 + 1, l]) for i in ii, j in jj, l in 1:size(block, 3)]
-    end
-end
-
-"Grid spacing in metres from the clone map, as `config.delrow/delcol` (GDAL geotransform × 111 km)."
-function clone_spacing(path)
-    NCDataset(path) do ds
-        lon = Float64.(ds["lon"][:])
-        lat = Float64.(ds["lat"][:])
-        dx = (lon[end] - lon[1]) / (length(lon) - 1)
-        dy = abs(lat[end] - lat[1]) / (length(lat) - 1)
-        (dx * 111_000.0, dy * 111_000.0)
+        v = ds[data_variable(ds, spec, path)]
+        lon, lat = file_coordinates(ds, v, path, spec.lat_order)
+        issorted(lon) || error("$path: longitudes must be ascending")
+        lat = sort(lat)
+        dx, dy = (lon[end] - lon[1]) / (length(lon) - 1), (lat[end] - lat[1]) / (length(lat) - 1)
+        lon, lat, dx * 111_000.0, dy * 111_000.0
     end
 end
 
 """
     read_static_inputs(config) -> StaticInputs
 
-Read and align all static inputs to the `ibound_indus_normalized.nc` grid.
+Read all static inputs of `config.inputs` and align them to the grid of the
+`ibound` input. Optional inputs that are not given are NaN.
 """
 function read_static_inputs(config::Config)
-    path(key) = input_path(config, key)
-    lon, lat, idomain = NCDataset(path("ibound")) do ds
-        Float64.(ds["lon"][:]), Float64.(ds["lat"][:]), Int.(ds["ibound"][:, :])
-    end
-    issorted(lat) || error("ibound latitudes must be ascending")
-    issorted(lon) || error("ibound longitudes must be ascending")
-    field(key, var = "Band1") = read_field(path(key), var, STORAGE_ORDER[key], lon, lat)
-    capillary(var) = read_field(path("capillary"), var, STORAGE_ORDER["capillary"], lon, lat)
-    delr, delc = clone_spacing(path("clone"))
+    validate(config)
+    lon, lat, delr, delc = read_grid(input_path(config, "ibound"), config.inputs["ibound"])
+    nan_field = fill(NaN, length(lon), length(lat))
+    field(key) = haskey(config.inputs, key) ?
+        read_field(input_path(config, key), config.inputs[key], lon, lat) : copy(nan_field)
+    idomain = field("ibound")
+    all(isfinite, idomain) || error("ibound has missing values on the grid")
+    # The steady head may come from a coarser-labelled global file (e.g. Float32
+    # coordinates): accept the nearest cell centre within 0.6 grid cells.
+    steady_head = haskey(config.inputs, "steady_head") ?
+        read_field(input_path(config, "steady_head"), config.inputs["steady_head"], lon, lat;
+                   tol = 0.6 * min(lon[2] - lon[1], lat[2] - lat[1])) :
+        fill(NaN, length(lon), length(lat), 2)
+    size(steady_head, 3) == 2 || error("steady_head has $(size(steady_head, 3)) layers, expected 2")
 
     return StaticInputs(
-        lon, lat, delr, delc, idomain,
-        isfinite.(field("landmask")),
+        lon, lat, delr, delc, Int.(idomain),
+        map(x -> isfinite(x) && x != 0, field("landmask")),
         field("dem"),
         field("aqdepth"),
         field("cell_area"),
@@ -177,16 +155,16 @@ function read_static_inputs(config::Config)
         field("ksat_l1_conf_log"),
         field("ksat_l2_conf_log"),
         field("spe_yi"),
-        field("qbank", "qbank"),
+        field("qbank"),
         field("riv_slope"),
         field("min_dem"),
         field("z0_floodplain"),
-        capillary("cpsurface"),
-        capillary("cprate"),
-        capillary("cpdistinct"),
+        field("cpsurface"),
+        field("cprate"),
+        field("cpdistinct"),
         field("kq3"),
-        field("ldd"),
-        select_global_head(path("global_steady_head"), lon, lat),
+        field("catchment"),
+        steady_head,
     )
 end
 

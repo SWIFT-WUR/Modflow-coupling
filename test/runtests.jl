@@ -2,16 +2,39 @@ using Test
 using Dates
 using Statistics
 using NCDatasets
-using IndusModflow
-import IndusModflow as IM
+using ModflowCoupling
+import ModflowCoupling as MC
 import BasicModelInterface as BMI
 
-# Static inputs: INDUS_MODFLOW_DATA, or `data/` next to this repository
-const DATA_DIR = get(ENV, "INDUS_MODFLOW_DATA", normpath(@__DIR__, "..", "..", "data"))
+# The tests run the Indus example. Static inputs: INDUS_DATA, or `data/` next
+# to this repository (the data_dir of examples/indus/indus.toml).
+const INDUS_DIR = normpath(@__DIR__, "..", "examples", "indus")
+const INDUS = load_config(joinpath(INDUS_DIR, "indus.toml"))
+const DATA_DIR = get(ENV, "INDUS_DATA", INDUS.data_dir)
 
 function test_config(dir; start = Date(1979, 1, 1), stop = Date(1979, 3, 31), kwargs...)
-    Config(; data_dir = DATA_DIR, work_dir = joinpath(dir, "mf6"), output_dir = joinpath(dir, "output"),
+    Config(INDUS; data_dir = DATA_DIR, work_dir = joinpath(dir, "mf6"), output_dir = joinpath(dir, "output"),
            start_date = start, end_date = stop, kwargs...)
+end
+
+"""
+Indus-specific orientation fingerprints, on top of the generic ones in
+`audit_static_inputs` (verified 2026-09-28 and 2026-10-16; examples/indus/README.md).
+"""
+function indus_fingerprints(s, p)
+    sukkur = CartesianIndex(argmin(abs.(s.lon .- 68.87)), argmin(abs.(s.lat .- 27.7)))
+    window = CartesianIndices((sukkur[1]-2:sukkur[1]+2, sukkur[2]-2:sukkur[2]+2))
+    rowmean_area = vec(sum(s.cell_area; dims = 1)) ./ size(s.cell_area, 1)
+    return [
+        "grid is 180 rows x 204 columns" => size(s) == (204, 180),
+        "cell area decreases northward" => issorted(rowmean_area; rev = true),
+        "bankfull discharge > 5000 m3/s near Sukkur" => maximum(s.qbank[window]) > 5000,
+        "Indus main stem in one catchment" => let ids = s.catchment[s.qbank .> 1000]
+            maximum(count(==(u), ids) for u in unique(ids)) / length(ids) > 0.9
+        end,
+        "DRN on at least 95% of active land cells" =>
+            length(p.drain.cells) >= 0.95 * count(s.landmask .& (s.idomain .> 0)),
+    ]
 end
 
 "Synthetic VIC forcing: uniform recharge on land and a fraction of bankfull discharge."
@@ -32,14 +55,14 @@ end
 
 const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
 
-@testset "IndusModflow" begin
+@testset "ModflowCoupling: Indus example" begin
     tmp = mktempdir()
     cfg = test_config(tmp)
     s = read_static_inputs(cfg)
     p = build_parameters(s, cfg)
 
     @testset "Case 0: static audit" begin
-        for (name, ok) in audit_static_inputs(s, p)
+        for (name, ok) in [audit_static_inputs(s, p, cfg); indus_fingerprints(s, p)]
             @test ok
         end
         @test 2 * length(p.chd_cells) == 1410          # reference_cases.md regression count
@@ -48,22 +71,22 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
     end
 
     @testset "parameter formulas" begin
-        @test IM.permeability_to_conductivity(-12.0) ≈ 1000 * 1e-12 * (9.81 / 0.001) * 86400
+        @test MC.permeability_to_conductivity(-12.0) ≈ 1000 * 1e-12 * (9.81 / 0.001) * 86400
         r = p.river
         i = findfirst(r.is_river)
-        @test IM.river_stage(r, i, -1.0) == r.bottom[i]            # no river infiltration
-        @test IM.river_stage(r, i, 0.0) == r.bottom_bankfull[i]    # depth < 0.01 m -> 0
+        @test MC.river_stage(r, i, -1.0) == r.bottom[i]            # no river infiltration
+        @test MC.river_stage(r, i, 0.0) == r.bottom_bankfull[i]    # depth < 0.01 m -> 0
         q = 1000.0
         depth = (0.045q / (r.width[i] * sqrt(r.slope[i])))^(3 / 5)
-        @test IM.river_stage(r, i, q) ≈ r.bottom_bankfull[i] + depth
+        @test MC.river_stage(r, i, q) ≈ r.bottom_bankfull[i] + depth
         j = findfirst(!, r.is_river)
-        @test IM.river_stage(r, j, 50.0) == r.head_ini[j]
+        @test MC.river_stage(r, j, 50.0) == r.head_ini[j]
         c = p.evt_cells[1]
         @test p.evt_rate[1] ≈ s.cprate[c] * s.cell_area[c] / (s.delr * s.delc)
     end
 
     @testset "Case 1/2: continuous run, BMI exchange" begin
-        m = IndusGroundwater(cfg)
+        m = GroundwaterModel(cfg)
         @test BMI.get_current_time(m) == 0.0
         @test BMI.get_end_time(m) == 90.0
         @test BMI.get_time_step(m) == 31.0
@@ -99,7 +122,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         BMI.finalize(m)
 
         # BMI SIMVALS equal the MF6 budget in the listing file
-        lst = joinpath(cfg.work_dir, "indus.lst")
+        lst = joinpath(cfg.work_dir, lowercase(cfg.model_name) * ".lst")
         for (pkg, flows) in (("RIV", riv), ("EVT", evt), ("RCH", rch), ("DRN", drn))
             for (k, (qin, qout)) in enumerate(listing_rates(lst, pkg))
                 @test sum(max.(flows[k], 0)) ≈ qin rtol = 1e-8 atol = 1e-3
@@ -108,7 +131,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         end
 
         # Monthly output file
-        NCDataset(joinpath(cfg.output_dir, "indus_modflow_monthly.nc")) do ds
+        NCDataset(joinpath(cfg.output_dir, "modflow_monthly.nc")) do ds
             @test length(ds["time"]) == 3
             @test isequal(coalesce.(ds["groundwater_head"][:, :, :, 3], NaN), heads[3])
         end
@@ -116,7 +139,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         @testset "restart after January equals continuous run" begin
             restart = test_config(joinpath(tmp, "restart"); start = Date(1979, 2, 1),
                                   initial_head_file = joinpath(cfg.output_dir, "head_19790131.nc"))
-            m2 = IndusGroundwater(restart)
+            m2 = GroundwaterModel(restart)
             for (k, frac) in enumerate(FORCING[2:3])
                 force!(m2, frac)
                 BMI.update(m2)
@@ -130,10 +153,10 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
     end
 
     @testset "forcing file and BMI metadata" begin
-        include(joinpath(@__DIR__, "..", "scripts", "make_synthetic_forcing.jl"))
-        forcing = make_synthetic_forcing(joinpath(tmp, "forcing", "vic.nc"), 1979:1979)
+        include(joinpath(INDUS_DIR, "make_synthetic_forcing.jl"))
+        forcing = make_synthetic_forcing(joinpath(tmp, "forcing", "vic.nc"), 1979:1979; config = cfg)
         cfgf = test_config(joinpath(tmp, "forcing"); stop = Date(1979, 2, 28), forcing_file = forcing)
-        m = IndusGroundwater(cfgf)
+        m = GroundwaterModel(cfgf)
         @test BMI.get_time_units(m) == "days since 1979-01-01"
         @test BMI.get_grid_shape(m, 0) == [180, 204]
         @test BMI.get_grid_shape(m, 1, zeros(Int, 3)) == [2, 180, 204]
@@ -155,7 +178,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         land = findfirst(vec(s.landmask .& (s.idomain .> 0)))
         @test depth[land] ≈ vec(p.top)[land] - vec(m.head[:, :, 1])[land]
         # A new model finalizes the active one instead of clashing in libmf6
-        m2 = IndusGroundwater(cfgf)
+        m2 = GroundwaterModel(cfgf)
         @test m.mf === nothing
         BMI.update(m2)
         BMI.finalize(m2)
@@ -163,7 +186,7 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
 
     @testset "input validation" begin
         cfgw = test_config(joinpath(tmp, "wel"); stop = Date(1979, 1, 31), pumping = true)
-        m = IndusGroundwater(cfgw)
+        m = GroundwaterModel(cfgw)
         bad = zeros(size(m.abstraction)); bad[findfirst(==(0), s.idomain)] = 1.0
         @test_throws ErrorException BMI.set_value(m, "groundwater_abstraction", vec(bad))
         @test_throws ErrorException BMI.set_value(m, "groundwater_abstraction", fill(-1.0, length(bad)))
@@ -178,5 +201,64 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
         @test_throws ErrorException align_to_grid(zeros(204, 180), s.lon .+ 0.01, s.lat, s)
         shuffled = reverse(s.dem; dims = 2)
         @test isequal(align_to_grid(shuffled, s.lon, reverse(s.lat), s), s.dem)
+    end
+
+    @testset "config" begin
+        # `extends`: paths resolve against the file that sets them, tables merge
+        syn = load_config(joinpath(INDUS_DIR, "synthetic.toml"))
+        @test syn.data_dir == INDUS.data_dir
+        @test syn.work_dir == joinpath(INDUS_DIR, "run", "mf6")
+        @test syn.forcing_file == joinpath(INDUS_DIR, "vic_synthetic_monthly.nc")
+        @test syn.end_date == Date(1981, 12, 31) && syn.model_name == "INDUS"
+        @test syn.inputs == INDUS.inputs
+        @test INDUS.inputs["dem"].lat_order == :south_first
+        @test INDUS.inputs["aqdepth"] == InputSpec("aqdepth_ini_indus.nc")
+
+        dir = mktempdir()
+        write_toml(name, text) = (path = joinpath(dir, name); write(path, text); path)
+        base = write_toml("base.toml", """
+            [paths]
+            data_dir = "data"
+            work_dir = "mf6"
+            output_dir = "out"
+            [time]
+            start_date = 1979-01-01
+            end_date = 1979-01-31
+            [inputs]
+            ibound = "ibound.nc"
+            """)
+        @test_throws r"missing inputs: landmask" load_config(base)
+        typo = write_toml("typo.toml", "extends = \"base.toml\"\n[inputs]\nlandmsk = \"x.nc\"\n")
+        @test_throws r"unknown inputs landmsk" load_config(typo)
+        bad = write_toml("bad.toml", "extends = \"base.toml\"\n[inputs]\ndem = { file = \"x.nc\", lat_order = \"up\" }\n")
+        @test_throws r"lat_order must be" load_config(bad)
+        loop = write_toml("loop.toml", "extends = \"loop.toml\"\n")
+        @test_throws r"circular" load_config(loop)
+        nohead = Config(cfg; inputs = filter(kv -> kv[1] != "steady_head", cfg.inputs))
+        @test_throws r"initial_head_file or inputs.steady_head" MC.validate(nohead)
+        nofoc = Config(cfg; foc = false, inputs = filter(kv -> !startswith(kv[1], "cp"), cfg.inputs))
+        @test MC.validate(nofoc) === nofoc
+    end
+
+    @testset "sub-domain from larger maps" begin
+        # A window of the Indus grid, with ibound stored north-first: every other
+        # input is cut from the full-domain files by coordinate, including the
+        # files with wrong latitude labels.
+        dir = mktempdir()
+        ii, jj = 61:120, 91:140
+        NCDataset(joinpath(dir, "ibound_window.nc"), "c") do ds
+            defVar(ds, "lon", s.lon[ii], ("lon",))
+            defVar(ds, "lat", reverse(s.lat[jj]), ("lat",))
+            defVar(ds, "ibound", reverse(s.idomain[ii, jj]; dims = 2), ("lon", "lat"))
+        end
+        inputs = merge(cfg.inputs, Dict("ibound" => InputSpec(joinpath(dir, "ibound_window.nc"))))
+        w = read_static_inputs(Config(cfg; inputs))
+        @test w.lon == s.lon[ii] && w.lat ≈ s.lat[jj]
+        @test w.idomain == s.idomain[ii, jj]
+        for f in (:landmask, :dem, :aqdepth, :cell_area, :qbank, :z0_floodplain, :cpdistinct, :catchment, :steady_head)
+            full = getfield(s, f)
+            @test isequal(getfield(w, f), ndims(full) == 3 ? full[ii, jj, :] : full[ii, jj])
+        end
+        @test w.delr ≈ s.delr && w.delc ≈ s.delc
     end
 end
