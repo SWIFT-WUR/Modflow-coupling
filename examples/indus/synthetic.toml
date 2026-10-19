@@ -1,9 +1,11 @@
 # Offline Indus natural FOC run driven by synthetic VIC forcing
-# (make_synthetic_forcing.jl). Suitable for the RemoteBMI server and BMI
-# Controller: every `update` reads the month's forcing itself.
-extends = "indus.toml"
+# (make_synthetic_forcing.jl), monthly stress periods 1979-1981. Suitable for
+# the RemoteBMI server and BMI Controller: every `update` reads the month's
+# forcing itself. The model is the one of indus.toml; only paths and time differ.
+model_name = "INDUS"
 
 [paths]
+data_dir = "../../../data"
 work_dir = "run/mf6"
 output_dir = "run/output"
 forcing_file = "vic_synthetic_monthly.nc"
@@ -11,3 +13,41 @@ forcing_file = "vic_synthetic_monthly.nc"
 [time]
 start_date = 1979-01-01
 end_date = 1981-12-31
+period = "month"
+
+[coupling]
+foc = true
+pumping = false
+
+[output]
+write_monthly = true
+save_mf6_binary = false
+
+[forcing]
+recharge_variable = "OUT_GWRECHARGE"   # mm/month
+discharge_variable = "OUT_DISCHARGE"   # m3/s
+
+# Static inputs, relative to data_dir. The latitude storage order of each file
+# was verified with physical fingerprints (README.md next to this file). The
+# labels are right except in dem and landmask: their data are stored
+# south-first under north-first labels.
+[inputs]
+ibound = "ibound_indus_normalized.nc"
+landmask = { file = "landmask_indus.nc", lat_order = "south_first" }
+dem = { file = "dem_ini_indus.nc", lat_order = "south_first" }
+aqdepth = "aqdepth_ini_indus.nc"
+cell_area = "cell_area_indus.nc"
+ksat_log = "ksat_log_indus.nc"
+ksat_l1_conf_log = "ksat_l1_conf_log_indus.nc"
+ksat_l2_conf_log = "ksat_l2_conf_log_indus.nc"
+spe_yi = "spe_yi_inp_indus.nc"
+qbank = "bankfull_discharge_indus.nc"
+riv_slope = "riv_slope_indus.nc"
+min_dem = "min_dem_indus.nc"
+z0_floodplain = "Z0_floodplain_indus_updated.nc"
+kq3 = "KQ3_indus.nc"
+catchment = "ldd_indus_updated.nc"   # catchment ids, not flow directions
+cpsurface = { file = "capillary_rise_indus.nc", variable = "cpsurface" }
+cprate = { file = "capillary_rise_indus.nc", variable = "cprate" }
+cpdistinct = { file = "capillary_rise_indus.nc", variable = "cpdistinct" }
+steady_head = "mf_ss_gwl_5minDRN.nc"   # global steady state, cut to the grid

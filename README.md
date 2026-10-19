@@ -34,9 +34,9 @@ import BasicModelInterface as BMI
 gw = BMI.initialize(GroundwaterModel, "examples/indus/indus.toml")
 BMI.set_value(gw, "groundwater_recharge", recharge)   # m/day on the MODFLOW grid
 BMI.set_value(gw, "river_discharge", discharge)       # m3/s
-BMI.update(gw)                                         # one stress period (a month by default)
+BMI.update(gw)                                         # one stress period (a day in this config)
 BMI.get_value_ptr(gw, "baseflow_to_routing")           # m3/s, for the next land-surface period
-BMI.get_value_ptr(gw, "capillary_rise")                # mm/month, for the next land-surface period
+BMI.get_value_ptr(gw, "capillary_rise")                # mm per period, for the next land-surface period
 BMI.finalize(gw)
 ```
 
@@ -45,14 +45,13 @@ placeholders. `examples/mgv_coupling` is a working daily coupling.
 
 ## Configuration
 
-A config is a TOML file. Relative paths in `[paths]` are resolved against the
-directory of the file; input files against `data_dir`. `extends = "other.toml"`
-starts from another config and overrides it table by table, so a dataset can be
-described once and shared by several runs (see `examples/indus/`).
+A config is one TOML file that describes the whole MODFLOW model: domain,
+inputs, time, packages and solver. Relative paths in `[paths]` are resolved
+against the directory of the file, and input files against `data_dir`, so a
+config moves together with its data. Unknown keys are an error.
 
 ```toml
 model_name = "GWF"                 # MODFLOW 6 model name, at most 16 characters
-extends = "base.toml"              # optional
 
 [paths]
 data_dir = "data"                  # where the [inputs] files are

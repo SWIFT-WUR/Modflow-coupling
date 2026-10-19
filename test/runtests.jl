@@ -6,15 +6,17 @@ using ModflowCoupling
 import ModflowCoupling as MC
 import BasicModelInterface as BMI
 
-# The tests run the Indus example. Static inputs: INDUS_DATA, or `data/` next
-# to this repository (the data_dir of examples/indus/indus.toml).
+# The tests run the Indus example model, with monthly periods from the global
+# steady state (the Python reference cases). Static inputs: INDUS_DATA, or
+# `data/` next to this repository (the data_dir of examples/indus/indus.toml).
 const INDUS_DIR = normpath(@__DIR__, "..", "examples", "indus")
 const INDUS = load_config(joinpath(INDUS_DIR, "indus.toml"))
 const DATA_DIR = get(ENV, "INDUS_DATA", INDUS.data_dir)
 
 function test_config(dir; start = Date(1979, 1, 1), stop = Date(1979, 3, 31), kwargs...)
     Config(INDUS; data_dir = DATA_DIR, work_dir = joinpath(dir, "mf6"), output_dir = joinpath(dir, "output"),
-           start_date = start, end_date = stop, kwargs...)
+           start_date = start, end_date = stop, period = "month", initial_head_file = "",
+           write_monthly_output = true, kwargs...)
 end
 
 """
@@ -204,19 +206,22 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
     end
 
     @testset "config" begin
-        # `extends`: paths resolve against the file that sets them, tables merge
-        syn = load_config(joinpath(INDUS_DIR, "synthetic.toml"))
-        @test syn.data_dir == INDUS.data_dir
-        @test syn.work_dir == joinpath(INDUS_DIR, "run", "mf6")
-        @test syn.forcing_file == joinpath(INDUS_DIR, "vic_synthetic_monthly.nc")
-        @test syn.end_date == Date(1981, 12, 31) && syn.model_name == "INDUS"
-        @test syn.inputs == INDUS.inputs
+        # Relative paths resolve against the config's directory
+        @test INDUS.data_dir == normpath(INDUS_DIR, "..", "..", "..", "data")
+        @test INDUS.initial_head_file == joinpath(INDUS.data_dir, "steady_head_mgv_coupled.nc")
+        @test INDUS.period == "day" && INDUS.model_name == "INDUS"
         @test INDUS.inputs["dem"].lat_order == :south_first
         @test INDUS.inputs["aqdepth"] == InputSpec("aqdepth_ini_indus.nc")
+        # The synthetic config describes the same model, monthly from the global steady state
+        syn = load_config(joinpath(INDUS_DIR, "synthetic.toml"))
+        @test syn.inputs == INDUS.inputs && syn.data_dir == INDUS.data_dir
+        @test syn.work_dir == joinpath(INDUS_DIR, "run", "mf6")
+        @test syn.forcing_file == joinpath(INDUS_DIR, "vic_synthetic_monthly.nc")
+        @test syn.period == "month" && isempty(syn.initial_head_file)
 
         dir = mktempdir()
         write_toml(name, text) = (path = joinpath(dir, name); write(path, text); path)
-        base = write_toml("base.toml", """
+        base = """
             [paths]
             data_dir = "data"
             work_dir = "mf6"
@@ -226,14 +231,11 @@ const FORCING = (0.3, 0.5, -0.1)   # March has negative discharge
             end_date = 1979-01-31
             [inputs]
             ibound = "ibound.nc"
-            """)
-        @test_throws r"missing inputs: landmask" load_config(base)
-        typo = write_toml("typo.toml", "extends = \"base.toml\"\n[inputs]\nlandmsk = \"x.nc\"\n")
-        @test_throws r"unknown inputs landmsk" load_config(typo)
-        bad = write_toml("bad.toml", "extends = \"base.toml\"\n[inputs]\ndem = { file = \"x.nc\", lat_order = \"up\" }\n")
-        @test_throws r"lat_order must be" load_config(bad)
-        loop = write_toml("loop.toml", "extends = \"loop.toml\"\n")
-        @test_throws r"circular" load_config(loop)
+            """
+        @test_throws r"missing inputs: landmask" load_config(write_toml("base.toml", base))
+        @test_throws r"unknown inputs landmsk" load_config(write_toml("typo.toml", base * "landmsk = \"x.nc\"\n"))
+        @test_throws r"lat_order must be" load_config(write_toml("bad.toml", base * "dem = { file = \"x.nc\", lat_order = \"up\" }\n"))
+        @test_throws r"unknown keys extends" load_config(write_toml("ext.toml", "extends = \"base.toml\"\n" * base))
         nohead = Config(cfg; inputs = filter(kv -> kv[1] != "steady_head", cfg.inputs))
         @test_throws r"initial_head_file or inputs.steady_head" MC.validate(nohead)
         nofoc = Config(cfg; foc = false, inputs = filter(kv -> !startswith(kv[1], "cp"), cfg.inputs))

@@ -122,41 +122,24 @@ end
 
 Config(c::Config; kw...) = Config(; (f => get(kw, f, getfield(c, f)) for f in fieldnames(Config))...)
 
-"Merge TOML table `b` into `a`, recursing into tables present in both."
-function deep_merge(a::AbstractDict, b::AbstractDict)
-    out = Dict{String,Any}(a)
-    for (k, v) in b
-        out[k] = (v isa AbstractDict && get(out, k, nothing) isa AbstractDict) ? deep_merge(out[k], v) : v
-    end
-    return out
-end
-
-"""
-Parse a config TOML and the chain of files it `extends`. Entries of `[paths]`
-are resolved against the directory of the file that sets them; the extending
-file's tables are merged over those of the file it extends.
-"""
-function read_config_toml(path::AbstractString, seen = String[])
-    path = abspath(path)
-    path in seen && error("circular `extends`: $(join([seen; path], " -> "))")
-    toml = TOML.parsefile(path)
-    root = dirname(path)
-    resolve(p) = isempty(p) ? p : normpath(isabspath(p) ? p : joinpath(root, p))
-    haskey(toml, "paths") && (toml["paths"] = Dict{String,Any}(k => resolve(v) for (k, v) in toml["paths"]))
-    parent = pop!(toml, "extends", nothing)
-    parent === nothing && return toml
-    return deep_merge(read_config_toml(isabspath(parent) ? parent : joinpath(root, parent), [seen; path]), toml)
-end
+const CONFIG_KEYS = ("model_name", "paths", "time", "coupling", "output", "audit", "forcing", "solver", "inputs")
 
 """
     load_config(path) -> Config
 
-Read a TOML run configuration. Relative paths in `[paths]` are resolved against
-the directory of the TOML file; input files in `[inputs]` against `data_dir`.
-`extends = "other.toml"` starts from another config. See `examples/indus/indus.toml`.
+Read a TOML run configuration. One file describes the whole MODFLOW model.
+Relative paths in `[paths]` are resolved against the directory of the TOML
+file, and input files in `[inputs]` against `data_dir`, so a config and its
+data can be moved together. See `examples/indus/indus.toml`.
 """
 function load_config(path::AbstractString)
-    toml = read_config_toml(path)
+    toml = TOML.parsefile(path)
+    unknown = setdiff(keys(toml), CONFIG_KEYS)
+    isempty(unknown) || error("$path: unknown keys $(join(sort(collect(unknown)), ", "))")
+    root = dirname(abspath(path))
+    resolve(p) = isempty(p) ? p : normpath(isabspath(p) ? p : joinpath(root, p))
+    haskey(toml, "paths") || error("$path has no [paths] table")
+    toml["paths"] = Dict{String,Any}(k => resolve(v) for (k, v) in toml["paths"])
     section(name) = get(toml, name, Dict{String,Any}())
     paths, time, coupling, output, forcing, audit = section.(("paths", "time", "coupling", "output", "forcing", "audit"))
     haskey(toml, "inputs") || error("$path has no [inputs] table")

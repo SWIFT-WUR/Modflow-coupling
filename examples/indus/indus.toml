@@ -1,25 +1,33 @@
 # Indus natural FOC run (reference_cases.md, Case 1/2) on the 5 arcmin Indus
-# grid. Relative paths are resolved against this file's directory; the other
-# Indus configs in this directory `extend` this one.
+# grid, with daily stress periods for the mGV coupling
+# (examples/mgv_coupling/couple_mgv.jl). This file describes the whole MODFLOW
+# model. Relative paths are resolved against this file's directory.
 model_name = "INDUS"
 
 [paths]
 data_dir = "../../../data"
-work_dir = "../../run/natural_foc/mf6"
-output_dir = "../../run/natural_foc/output"
-# initial_head_file = "../../run/natural_foc/output/head_19790131.nc"   # restart
+work_dir = "../../run/indus/mf6"
+output_dir = "../../run/indus/output"
+# Steady state of the coupled models, written by
+# examples/mgv_coupling/spinup_steady_state.jl (1975-1984 forcing, five
+# iterations). Leave it out to start from inputs.steady_head instead.
+initial_head_file = "../../../data/steady_head_mgv_coupled.nc"
 
 [time]
-start_date = 1979-01-01
-end_date = 1979-03-31
+start_date = 1975-01-01
+end_date = 2004-12-31
+period = "day"   # "month" as in the Python reference; the mGV coupling needs "day"
 
 [coupling]
 foc = true       # EVT package + capillary-rise feedback
 pumping = false  # WEL package (human extension)
 
 [output]
-write_monthly = true
+write_monthly = false   # per-period output file (one record per day here)
 save_mf6_binary = false
+
+[audit]
+orientation = true
 
 # [solver]  # defaults follow the Python reference
 # outer_dvclose = 5.0
@@ -27,7 +35,7 @@ save_mf6_binary = false
 # inner_rclose = 10.0
 
 # Static inputs, relative to data_dir. The latitude storage order of each file
-# was verified with physical fingerprints (README.md in this directory). The
+# was verified with physical fingerprints (README.md next to this file). The
 # labels are right except in dem and landmask: their data are stored
 # south-first under north-first labels.
 [inputs]

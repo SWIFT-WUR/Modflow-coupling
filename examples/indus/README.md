@@ -6,11 +6,12 @@ this case.
 
 Files:
 
-- `indus.toml`: natural FOC run (reference Case 1/2), 1979-01 to 1979-03,
-  with the static inputs in `[inputs]`. The other configs extend it.
-- `synthetic.toml`: offline run driven by synthetic forcing, 1979–1981.
-- `mgv_daily.toml`: daily run for the mGV coupling (`examples/mgv_coupling`),
-  starting from the coupled steady state.
+- `indus.toml`: the Indus model. Natural FOC run (reference Case 1/2) with
+  daily periods 1975–2004 for the mGV coupling (`examples/mgv_coupling`),
+  starting from the coupled steady state. Set `period = "month"` and leave out
+  `initial_head_file` for the monthly reference setup that the tests run.
+- `synthetic.toml`: the same model, monthly 1979–1981 from the global steady
+  state, driven by synthetic forcing.
 - `make_synthetic_forcing.jl`: writes the synthetic forcing for `synthetic.toml`.
 
 ## Input data

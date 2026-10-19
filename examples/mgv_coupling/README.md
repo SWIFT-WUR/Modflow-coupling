@@ -6,7 +6,7 @@ Files:
 - `spinup_steady_state.jl` computes steady-state groundwater heads to start from
   (see "Starting heads" below).
 - `coupling.jl` holds the functions both scripts share.
-- `../indus/mgv_daily.toml` is a daily MODFLOW config for the Indus that starts
+- `../indus/indus.toml` is the daily MODFLOW config for the Indus that starts
   from the stored steady-state heads. For another domain, write a config with
   that domain's `[inputs]` and `period = "day"` (see the main README).
 
@@ -62,7 +62,7 @@ git switch mgv-to-modflow-coupling
 cd /path/to/ModflowCoupling
 julia --project=examples/mgv_coupling -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="/path/to/mGV")])'
 julia --project=examples/mgv_coupling examples/mgv_coupling/couple_mgv.jl \
-    /path/to/mGV/configs/indus_config.toml examples/indus/mgv_daily.toml
+    /path/to/mGV/configs/indus_config.toml examples/indus/indus.toml
 ```
 
 The MODFLOW config must have `period = "day"` under `[time]`; the script stops
@@ -79,12 +79,12 @@ MODFLOW in steady state with the mean recharge and river discharge of that run
 
 ```bash
 julia --project=examples/mgv_coupling examples/mgv_coupling/spinup_steady_state.jl \
-    /path/to/mGV/configs/indus_1975_1984.toml examples/indus/mgv_daily.toml \
+    /path/to/mGV/configs/indus_1975_1984.toml examples/indus/indus.toml \
     ../data/steady_head_mgv_coupled.nc 5
 ```
 
 It writes the heads (variable `gwl`, the form `initial_head_file` reads) and
-the mean forcing (`..._forcing.nc`). `mgv_daily.toml` points
+the mean forcing (`..._forcing.nc`). `indus.toml` points
 `initial_head_file` at `../data/steady_head_mgv_coupled.nc`, which holds the
 result for 1975–1984 forcing (GFDL-ESM4 historical) after five iterations,
 starting from the global steady state, with the DRN package and river bottoms
